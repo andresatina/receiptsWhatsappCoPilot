@@ -1,6 +1,9 @@
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from datetime import datetime
+import os
+import base64
+import json
 
 class SheetsHandler:
     def __init__(self, credentials_path, sheet_id):
@@ -8,9 +11,19 @@ class SheetsHandler:
         
         # Set up credentials
         SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
-        credentials = service_account.Credentials.from_service_account_file(
-            credentials_path, scopes=SCOPES
-        )
+        
+        # Check if base64 credentials exist (for Railway deployment)
+        if os.getenv('GOOGLE_CREDENTIALS_BASE64'):
+            creds_json = base64.b64decode(os.getenv('GOOGLE_CREDENTIALS_BASE64')).decode('utf-8')
+            creds_dict = json.loads(creds_json)
+            credentials = service_account.Credentials.from_service_account_info(
+                creds_dict, scopes=SCOPES
+            )
+        else:
+            # Use file (for local development)
+            credentials = service_account.Credentials.from_service_account_file(
+                credentials_path, scopes=SCOPES
+            )
         
         self.service = build('sheets', 'v4', credentials=credentials)
         self.sheet = self.service.spreadsheets()
