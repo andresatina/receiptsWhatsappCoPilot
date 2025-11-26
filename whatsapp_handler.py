@@ -8,7 +8,9 @@ class WhatsAppHandler:
     
     def send_message(self, to_number, message):
         """Send text message via WhatsApp using Kapso's Meta API proxy"""
-        url = "https://app.kapso.ai/api/meta/messages"
+        # Following Kapso's documentation exactly:
+        # https://api.kapso.ai/meta/whatsapp/v24.0/{phone_number_id}/messages
+        url = f"https://api.kapso.ai/meta/whatsapp/v24.0/{self.phone_number_id}/messages"
         
         payload = {
             "messaging_product": "whatsapp",
@@ -16,7 +18,6 @@ class WhatsAppHandler:
             "to": to_number,
             "type": "text",
             "text": {
-                "preview_url": False,
                 "body": message
             }
         }
@@ -26,12 +27,8 @@ class WhatsAppHandler:
             "Content-Type": "application/json"
         }
         
-        params = {
-            "phone_number_id": self.phone_number_id
-        }
-        
         try:
-            response = requests.post(url, json=payload, headers=headers, params=params)
+            response = requests.post(url, json=payload, headers=headers)
             print(f"Send message response status: {response.status_code}")
             print(f"Send message response: {response.text}")
             response.raise_for_status()
