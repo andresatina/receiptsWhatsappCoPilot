@@ -34,6 +34,47 @@ drive = DriveHandler(
 # Store conversation states in memory (use Redis/DB in production)
 conversation_states = {}
 
+def get_message(from_number, msg_key):
+    """Get message in user's language"""
+    # Check if we know the user's language from previous conversation
+    # Default to Spanish for property management users
+    lang = conversation_states.get(from_number, {}).get('language', 'es')
+    
+    messages = {
+        'processing': {
+            'en': '🔍 Processing your receipt...',
+            'es': '🔍 Procesando tu recibo...'
+        },
+        'saving': {
+            'en': '💾 Saving receipt...',
+            'es': '💾 Guardando recibo...'
+        },
+        'saved': {
+            'en': '✅ Receipt saved successfully!',
+            'es': '✅ Recibo guardado exitosamente!'
+        },
+        'logged': {
+            'en': '📊 Logged in Google Sheets',
+            'es': '📊 Registrado en Google Sheets'
+        },
+        'send_another': {
+            'en': 'Send another receipt anytime!',
+            'es': '¡Envía otro recibo cuando quieras!'
+        }
+    }
+    
+    return messages.get(msg_key, {}).get(lang, messages.get(msg_key, {}).get('en', ''))
+
+def detect_language(text):
+    """Simple language detection"""
+    text_lower = text.lower()
+    spanish_words = ['hola', 'sí', 'si', 'no', 'gracias', 'por favor', 'qué', 'cuál', 'para', 'de', 'la', 'el']
+    
+    # Count Spanish words
+    spanish_count = sum(1 for word in spanish_words if word in text_lower)
+    
+    return 'es' if spanish_count > 0 else 'en'
+
 @app.route('/webhook', methods=['GET', 'POST'])
 def webhook():
     """Handle Kapso webhook for incoming WhatsApp messages"""
@@ -100,7 +141,11 @@ def handle_receipt_image(from_number, message):
             return
         
         # Extract data using Claude
-        whatsapp.send_message(from_number, "🔍 Processing your receipt...")
+        # Default to Spanish for first-time image senders (can be updated when they respond)
+        if from_number not in conversation_states:
+            conversation_states[from_number] = {'language': 'es'}  # Default to Spanish
+        
+        whatsapp.send_message(from_number, get_message(from_number, 'processing'))
         
         extracted_data = claude.extract_receipt_data(image_data)
         
@@ -125,6 +170,11 @@ def handle_receipt_image(from_number, message):
 
 def handle_text_response(from_number, text):
     """Handle text responses from user with natural conversation"""
+    
+    # Detect and store language if not already set
+    if from_number in conversation_states:
+        if 'language' not in conversation_states[from_number]:
+            conversation_states[from_number]['language'] = detect_language(text)
     
     if from_number not in conversation_states:
         whatsapp.send_message(
@@ -200,7 +250,7 @@ def finalize_receipt(from_number):
     state = conversation_states[from_number]
     
     try:
-        whatsapp.send_message(from_number, "💾 Saving receipt...")
+        whatsapp.send_message(from_number, get_message(from_number, 'saving'))
         
         # Upload to Google Drive - TEMPORARILY DISABLED (permissions issue)
         # image_filename = f"receipt_{state['image_hash'][:8]}.jpg"
@@ -215,19 +265,36 @@ def finalize_receipt(from_number):
         
         # Send confirmation
         data = state['extracted_data']
-        confirmation = f"""✅ Receipt saved successfully!
+        lang = state.get('language', 'en')
+        
+        if lang == 'es':
+            confirmation = f"""{get_message(from_number, 'saved')}
+
+📝 Resumen:
+• Comercio: {data.get('merchant_name', 'N/A')}
+• Fecha: {data.get('date', 'N/A')}
+• Monto: ${data.get('total_amount', 'N/A')}
+• Categoría: {data.get('category', 'N/A')}
+• Propiedad: {data.get('cost_center', 'N/A')}
+• Pago: {data.get('payment_method', 'N/A')}
+
+{get_message(from_number, 'logged')}
+
+{get_message(from_number, 'send_another')}"""
+        else:
+            confirmation = f"""{get_message(from_number, 'saved')}
 
 📝 Summary:
 • Merchant: {data.get('merchant_name', 'N/A')}
 • Date: {data.get('date', 'N/A')}
 • Amount: ${data.get('total_amount', 'N/A')}
 • Category: {data.get('category', 'N/A')}
-• Cost Center: {data.get('cost_center', 'N/A')}
+• Property: {data.get('cost_center', 'N/A')}
 • Payment: {data.get('payment_method', 'N/A')}
 
-📊 Logged in Google Sheets
+{get_message(from_number, 'logged')}
 
-Send another receipt anytime!"""
+{get_message(from_number, 'send_another')}"""
         
         whatsapp.send_message(from_number, confirmation)
         
