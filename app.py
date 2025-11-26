@@ -187,12 +187,12 @@ def finalize_receipt(from_number):
     try:
         whatsapp.send_message(from_number, "💾 Saving receipt...")
         
-        # Upload to Google Drive
-        image_filename = f"receipt_{state['image_hash'][:8]}.jpg"
-        drive_url = drive.upload_image(state['image_data'], image_filename)
+        # Upload to Google Drive - TEMPORARILY DISABLED (permissions issue)
+        # image_filename = f"receipt_{state['image_hash'][:8]}.jpg"
+        # drive_url = drive.upload_image(state['image_data'], image_filename)
         
         # Add Drive URL to data
-        state['extracted_data']['drive_url'] = drive_url
+        state['extracted_data']['drive_url'] = 'N/A'  # Placeholder until Drive permissions fixed
         state['extracted_data']['image_hash'] = state['image_hash']
         
         # Save to Google Sheets
@@ -210,7 +210,6 @@ def finalize_receipt(from_number):
 • Cost Center: {data.get('cost_center', 'N/A')}
 • Payment: {data.get('payment_method', 'N/A')}
 
-📎 Filed in Google Drive
 📊 Logged in Google Sheets
 
 Send another receipt anytime!"""
