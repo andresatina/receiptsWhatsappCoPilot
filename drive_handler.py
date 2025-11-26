@@ -2,6 +2,9 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaInMemoryUpload
 import io
+import os
+import base64
+import json
 
 class DriveHandler:
     def __init__(self, credentials_path, folder_id):
@@ -9,9 +12,19 @@ class DriveHandler:
         
         # Set up credentials
         SCOPES = ['https://www.googleapis.com/auth/drive.file']
-        credentials = service_account.Credentials.from_service_account_file(
-            credentials_path, scopes=SCOPES
-        )
+        
+        # Check if base64 credentials exist (for Railway deployment)
+        if os.getenv('GOOGLE_CREDENTIALS_BASE64'):
+            creds_json = base64.b64decode(os.getenv('GOOGLE_CREDENTIALS_BASE64')).decode('utf-8')
+            creds_dict = json.loads(creds_json)
+            credentials = service_account.Credentials.from_service_account_info(
+                creds_dict, scopes=SCOPES
+            )
+        else:
+            # Use file (for local development)
+            credentials = service_account.Credentials.from_service_account_file(
+                credentials_path, scopes=SCOPES
+            )
         
         self.service = build('drive', 'v3', credentials=credentials)
     
