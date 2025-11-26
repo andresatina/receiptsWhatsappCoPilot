@@ -154,7 +154,7 @@ def handle_text_response(from_number, text):
             whatsapp_handler=whatsapp
         )
         
-        # Send the natural response
+        # Send the natural response (Claude already asked the next question if needed)
         whatsapp.send_message(from_number, result['response'])
         
         # Update extracted data if Claude provided values
@@ -163,8 +163,14 @@ def handle_text_response(from_number, text):
                 if value:  # Only update if there's a real value
                     state['extracted_data'][key] = value
         
-        # Continue asking for missing info or finalize
-        ask_for_missing_info(from_number)
+        # Check if we have everything we need
+        has_category = bool(state['extracted_data'].get('category'))
+        has_cost_center = bool(state['extracted_data'].get('cost_center'))
+        
+        # If we have both, finalize
+        if has_category and has_cost_center:
+            finalize_receipt(from_number)
+        # Otherwise, Claude's response already asked for what's missing
 
 def ask_for_missing_info(from_number):
     """Ask user for missing information"""
@@ -179,9 +185,9 @@ def ask_for_missing_info(from_number):
         # Ask for the first missing field
         field = missing[0]
         if field == 'category':
-            question = "📂 What category is this expense? (e.g., Meals, Travel, Supplies, Office)"
+            question = "📂 What category is this expense? (e.g., Maintenance, Utilities, Repairs, Supplies)"
         elif field == 'cost_center':
-            question = "🏢 What cost center should this be assigned to?"
+            question = "🏠 Which property/unit is this expense for?"
         
         state['current_question'] = field
         whatsapp.send_message(from_number, question)
