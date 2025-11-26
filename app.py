@@ -12,6 +12,7 @@ from whatsapp_handler import WhatsAppHandler
 from claude_handler import ClaudeHandler
 from sheets_handler import SheetsHandler
 from drive_handler import DriveHandler
+from conversational_helper import conversational
 
 app = Flask(__name__)
 
@@ -123,7 +124,7 @@ def handle_receipt_image(from_number, message):
         )
 
 def handle_text_response(from_number, text):
-    """Handle text responses from user"""
+    """Handle text responses from user with natural conversation"""
     
     if from_number not in conversation_states:
         whatsapp.send_message(
@@ -136,7 +137,7 @@ def handle_text_response(from_number, text):
     
     # Handle duplicate confirmation
     if state['state'] == 'duplicate_confirmation':
-        if text.lower() in ['yes', 'y']:
+        if text.lower() in ['yes', 'y', 'si', 'sí']:
             state['state'] = 'collecting_info'
             ask_for_missing_info(from_number)
         else:
@@ -144,15 +145,23 @@ def handle_text_response(from_number, text):
             del conversation_states[from_number]
         return
     
-    # Handle collecting missing info
+    # Handle collecting missing info with conversational AI
     if state['state'] == 'collecting_info':
-        # Use Claude to parse the response and update extracted data
-        updated_data = claude.update_with_user_response(
-            state['extracted_data'],
-            state.get('current_question', ''),
-            text
+        # Get conversational response from Claude
+        result = conversational.get_conversational_response(
+            user_message=text,
+            conversation_state=state,
+            whatsapp_handler=whatsapp
         )
-        state['extracted_data'] = updated_data
+        
+        # Send the natural response
+        whatsapp.send_message(from_number, result['response'])
+        
+        # Update extracted data if Claude provided values
+        if result['extracted_data']:
+            for key, value in result['extracted_data'].items():
+                if value:  # Only update if there's a real value
+                    state['extracted_data'][key] = value
         
         # Continue asking for missing info or finalize
         ask_for_missing_info(from_number)
