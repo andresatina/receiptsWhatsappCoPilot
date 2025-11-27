@@ -177,10 +177,15 @@ def handle_text_response(from_number, text):
             conversation_states[from_number]['language'] = detect_language(text)
     
     if from_number not in conversation_states:
-        whatsapp.send_message(
-            from_number,
-            "👋 Hi! Please send me a receipt image to get started."
-        )
+        # Detect language from greeting
+        lang = detect_language(text)
+        
+        greeting = {
+            'es': '👋 ¡Hola! Por favor envíame una foto de un recibo para empezar.',
+            'en': '👋 Hi! Please send me a receipt image to get started.'
+        }
+        
+        whatsapp.send_message(from_number, greeting.get(lang, greeting['es']))
         return
     
     state = conversation_states[from_number]
@@ -191,7 +196,12 @@ def handle_text_response(from_number, text):
             state['state'] = 'collecting_info'
             ask_for_missing_info(from_number)
         else:
-            whatsapp.send_message(from_number, "✅ Receipt filing cancelled.")
+            lang = state.get('language', 'es')
+            cancel_msg = {
+                'es': '✅ Archivado de recibo cancelado.',
+                'en': '✅ Receipt filing cancelled.'
+            }
+            whatsapp.send_message(from_number, cancel_msg.get(lang, cancel_msg['es']))
             del conversation_states[from_number]
         return
     
