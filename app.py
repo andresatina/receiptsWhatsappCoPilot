@@ -1,9 +1,7 @@
 from dotenv import load_dotenv
-load_dotenv()  # Add this line right after imports
+load_dotenv()
 
 import os
-
-
 from flask import Flask, request, jsonify
 import hashlib
 import json
@@ -34,46 +32,30 @@ drive = DriveHandler(
 # Store conversation states in memory (use Redis/DB in production)
 conversation_states = {}
 
-def get_message(from_number, msg_key):
-    """Get message in user's language"""
-    # Check if we know the user's language from previous conversation
-    # Default to Spanish for property management users
-    lang = conversation_states.get(from_number, {}).get('language', 'es')
-    
-    messages = {
-        'processing': {
-            'en': '🔍 Processing your receipt...',
-            'es': '🔍 Procesando tu recibo...'
-        },
-        'saving': {
-            'en': '💾 Saving receipt...',
-            'es': '💾 Guardando recibo...'
-        },
-        'saved': {
-            'en': '✅ Receipt saved successfully!',
-            'es': '✅ Recibo guardado exitosamente!'
-        },
-        'logged': {
-            'en': '📊 Logged in Google Sheets',
-            'es': '📊 Registrado en Google Sheets'
-        },
-        'send_another': {
-            'en': 'Send another receipt anytime!',
-            'es': '¡Envía otro recibo cuando quieras!'
-        }
-    }
-    
-    return messages.get(msg_key, {}).get(lang, messages.get(msg_key, {}).get('en', ''))
 
 def detect_language(text):
-    """Simple language detection"""
+    """Simple language detection - Spanish or English"""
     text_lower = text.lower()
-    spanish_words = ['hola', 'sí', 'si', 'no', 'gracias', 'por favor', 'qué', 'cuál', 'para', 'de', 'la', 'el']
+    spanish_words = ['hola', 'sí', 'si', 'no', 'gracias', 'por favor', 'qué', 'cuál', 'para', 'de', 'la', 'el', 'un', 'una']
     
-    # Count Spanish words
     spanish_count = sum(1 for word in spanish_words if word in text_lower)
-    
     return 'es' if spanish_count > 0 else 'en'
+
+
+def get_loading_message(msg_type, language='es'):
+    """Get loading messages in user's language"""
+    messages = {
+        'processing': {
+            'es': '🔍 Procesando tu recibo...',
+            'en': '🔍 Processing your receipt...'
+        },
+        'saving': {
+            'es': '💾 Guardando recibo...',
+            'en': '💾 Saving receipt...'
+        }
+    }
+    return messages.get(msg_type, {}).get(language, messages.get(msg_type, {}).get('es', ''))
+
 
 @app.route('/webhook', methods=['GET', 'POST'])
 def webhook():
@@ -92,35 +74,46 @@ def webhook():
     data = request.json
     print(f"Received webhook: {json.dumps(data, indent=2)}")
     
-    # Extract message details
     try:
-        # Kapso format (different from Meta)
-        if 'message' in data:
-            message = data['message']
-            from_number = message['from']
-            message_type = message['type']
-            
-            # Handle image messages (receipts)
-            if message_type == 'image':
-                handle_receipt_image(from_number, message)
-            
-            # Handle text messages (responses to questions)
-            elif message_type == 'text':
-                handle_text_response(from_number, message['text']['body'])
+        if 'message' not in data:
+            return jsonify({'status': 'ok', 'note': 'no message in webhook'})
+        
+        message = data['message']
+        from_number = message['from']
+        message_type = message['type']
+        
+        # Handle image messages (receipts)
+        if message_type == 'image':
+            handle_receipt_image(from_number, message)
+        
+        # Handle text messages
+        elif message_type == 'text':
+            handle_text_response(from_number, message['text']['body'])
         
         return jsonify({'status': 'ok'})
         
     except Exception as e:
         print(f"Error processing webhook: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return jsonify({'status': 'error', 'message': str(e)}), 500
+
 
 def handle_receipt_image(from_number, message):
     """Process receipt image from WhatsApp"""
     try:
-        # Kapso provides direct image URL
-        image_url = message['kapso']['media_url']
+        # Get or create conversation state
+        if from_number not in conversation_states:
+            conversation_states[from_number] = {
+                'language': 'es',  # Default to Spanish
+                'state': 'new'
+            }
         
-        # Download image from URL
+        state = conversation_states[from_number]
+        lang = state.get('language', 'es')
+        
+        # Download image
+        image_url = message['kapso']['media_url']
         import requests
         response = requests.get(image_url)
         response.raise_for_status()
@@ -129,84 +122,114 @@ def handle_receipt_image(from_number, message):
         # Check for duplicate
         image_hash = hashlib.sha256(image_data).hexdigest()
         if sheets.is_duplicate(image_hash):
-            whatsapp.send_message(
-                from_number,
-                "⚠️ This receipt appears to be a duplicate. Do you want to file it anyway? Reply 'yes' to confirm or 'no' to cancel."
+            # Let Claude handle duplicate message naturally
+            result = conversational.get_conversational_response(
+                user_message="[User sent a duplicate receipt]",
+                conversation_state=state,
+                whatsapp_handler=whatsapp
             )
-            conversation_states[from_number] = {
-                'state': 'duplicate_confirmation',
-                'image_data': image_data,
-                'image_hash': image_hash
-            }
+            whatsapp.send_message(from_number, result['response'])
+            state['awaiting_duplicate_confirmation'] = True
+            state['pending_image'] = {'data': image_data, 'hash': image_hash}
             return
         
-        # Extract data using Claude
-        # Default to Spanish for first-time image senders (can be updated when they respond)
-        if from_number not in conversation_states:
-            conversation_states[from_number] = {'language': 'es'}  # Default to Spanish
+        # Send loading message IMMEDIATELY
+        whatsapp.send_message(from_number, get_loading_message('processing', lang))
         
-        whatsapp.send_message(from_number, get_message(from_number, 'processing'))
-        
+        # Extract data using Claude (slow operation)
         extracted_data = claude.extract_receipt_data(image_data)
         
-        # Initialize conversation state
-        conversation_states[from_number] = {
-            'state': 'collecting_info',
-            'image_data': image_data,
-            'image_hash': image_hash,
-            'extracted_data': extracted_data,
-            'missing_fields': []
-        }
+        # Store in state
+        state['state'] = 'collecting_info'
+        state['image_data'] = image_data
+        state['image_hash'] = image_hash
+        state['extracted_data'] = extracted_data
         
-        # Ask for missing information
-        ask_for_missing_info(from_number)
+        # Get conversational response from Claude
+        result = conversational.get_conversational_response(
+            user_message=f"[Receipt processed: {extracted_data.get('merchant_name')} for ${extracted_data.get('total_amount')}]",
+            conversation_state=state,
+            whatsapp_handler=whatsapp
+        )
+        
+        state['last_system_message'] = f"[Receipt processed: {extracted_data.get('merchant_name')} for ${extracted_data.get('total_amount')}]"
+        whatsapp.send_message(from_number, result['response'])
         
     except Exception as e:
         print(f"Error handling receipt image: {str(e)}")
-        whatsapp.send_message(
-            from_number,
-            f"❌ Error processing receipt: {str(e)}\n\nPlease try again or send a clearer image."
+        import traceback
+        traceback.print_exc()
+        # Let Claude handle error naturally
+        result = conversational.get_conversational_response(
+            user_message="[Error processing receipt image]",
+            conversation_state=conversation_states.get(from_number, {'language': 'es'}),
+            whatsapp_handler=whatsapp
         )
+        whatsapp.send_message(from_number, result['response'])
+
 
 def handle_text_response(from_number, text):
-    """Handle text responses from user with natural conversation"""
+    """Handle text responses from user"""
     
-    # Detect and store language if not already set
-    if from_number in conversation_states:
-        if 'language' not in conversation_states[from_number]:
-            conversation_states[from_number]['language'] = detect_language(text)
-    
+    # Get or create conversation state
     if from_number not in conversation_states:
-        # Detect language from greeting
-        lang = detect_language(text)
-        
-        greeting = {
-            'es': '👋 ¡Hola! Por favor envíame una foto de un recibo para empezar.',
-            'en': '👋 Hi! Please send me a receipt image to get started.'
+        conversation_states[from_number] = {
+            'language': detect_language(text),
+            'state': 'new'
         }
-        
-        whatsapp.send_message(from_number, greeting.get(lang, greeting['es']))
-        return
     
     state = conversation_states[from_number]
     
-    # Handle duplicate confirmation
-    if state['state'] == 'duplicate_confirmation':
-        if text.lower() in ['yes', 'y', 'si', 'sí']:
-            state['state'] = 'collecting_info'
-            ask_for_missing_info(from_number)
-        else:
-            lang = state.get('language', 'es')
-            cancel_msg = {
-                'es': '✅ Archivado de recibo cancelado.',
-                'en': '✅ Receipt filing cancelled.'
-            }
-            whatsapp.send_message(from_number, cancel_msg.get(lang, cancel_msg['es']))
-            del conversation_states[from_number]
+    # Update language if not set
+    if 'language' not in state or state['language'] is None:
+        state['language'] = detect_language(text)
+    
+    # If user is new (no receipt sent yet), let Claude handle greeting
+    if state.get('state') == 'new':
+        result = conversational.get_conversational_response(
+            user_message=text,
+            conversation_state=state,
+            whatsapp_handler=whatsapp
+        )
+        whatsapp.send_message(from_number, result['response'])
         return
     
-    # Handle collecting missing info with conversational AI
-    if state['state'] == 'collecting_info':
+    # Handle duplicate confirmation
+    if state.get('awaiting_duplicate_confirmation'):
+        if text.lower() in ['yes', 'y', 'si', 'sí']:
+            # Process the pending receipt
+            pending = state.pop('pending_image')
+            state.pop('awaiting_duplicate_confirmation')
+            
+            lang = state.get('language', 'es')
+            whatsapp.send_message(from_number, get_loading_message('processing', lang))
+            
+            extracted_data = claude.extract_receipt_data(pending['data'])
+            state['state'] = 'collecting_info'
+            state['image_data'] = pending['data']
+            state['image_hash'] = pending['hash']
+            state['extracted_data'] = extracted_data
+            
+            result = conversational.get_conversational_response(
+                user_message=f"[User confirmed duplicate, processing receipt]",
+                conversation_state=state,
+                whatsapp_handler=whatsapp
+            )
+            whatsapp.send_message(from_number, result['response'])
+        else:
+            # Cancelled
+            state.pop('pending_image', None)
+            state.pop('awaiting_duplicate_confirmation', None)
+            result = conversational.get_conversational_response(
+                user_message="[User cancelled duplicate receipt]",
+                conversation_state=state,
+                whatsapp_handler=whatsapp
+            )
+            whatsapp.send_message(from_number, result['response'])
+        return
+    
+    # Handle collecting info with conversational AI
+    if state.get('state') == 'collecting_info':
         # Get conversational response from Claude
         result = conversational.get_conversational_response(
             user_message=text,
@@ -214,13 +237,13 @@ def handle_text_response(from_number, text):
             whatsapp_handler=whatsapp
         )
         
-        # Send the natural response (Claude already asked the next question if needed)
+        # Send the natural response
         whatsapp.send_message(from_number, result['response'])
         
         # Update extracted data if Claude provided values
         if result['extracted_data']:
             for key, value in result['extracted_data'].items():
-                if value:  # Only update if there's a real value
+                if value:
                     state['extracted_data'][key] = value
         
         # Check if we have everything we need
@@ -230,98 +253,54 @@ def handle_text_response(from_number, text):
         # If we have both, finalize
         if has_category and has_cost_center:
             finalize_receipt(from_number)
-        # Otherwise, Claude's response already asked for what's missing
 
-def ask_for_missing_info(from_number):
-    """Ask user for missing information"""
-    state = conversation_states[from_number]
-    extracted_data = state['extracted_data']
-    
-    # Check what's missing
-    required_fields = ['category', 'cost_center']
-    missing = [f for f in required_fields if not extracted_data.get(f)]
-    
-    if missing:
-        # Ask for the first missing field
-        field = missing[0]
-        if field == 'category':
-            question = "📂 What category is this expense? (e.g., Maintenance, Utilities, Repairs, Supplies)"
-        elif field == 'cost_center':
-            question = "🏠 Which property/unit is this expense for?"
-        
-        state['current_question'] = field
-        whatsapp.send_message(from_number, question)
-    else:
-        # All info collected, finalize
-        finalize_receipt(from_number)
 
 def finalize_receipt(from_number):
-    """Save receipt to Sheets and Drive"""
+    """Save receipt to Sheets"""
     state = conversation_states[from_number]
+    lang = state.get('language', 'es')
     
     try:
-        whatsapp.send_message(from_number, get_message(from_number, 'saving'))
+        # Send loading message IMMEDIATELY
+        whatsapp.send_message(from_number, get_loading_message('saving', lang))
         
-        # Upload to Google Drive - TEMPORARILY DISABLED (permissions issue)
-        # image_filename = f"receipt_{state['image_hash'][:8]}.jpg"
-        # drive_url = drive.upload_image(state['image_data'], image_filename)
-        
-        # Add Drive URL to data
-        state['extracted_data']['drive_url'] = 'N/A'  # Placeholder until Drive permissions fixed
+        # Save to Google Sheets (slow operation)
+        state['extracted_data']['drive_url'] = 'N/A'
         state['extracted_data']['image_hash'] = state['image_hash']
-        
-        # Save to Google Sheets
         sheets.add_receipt(state['extracted_data'])
         
-        # Send confirmation
-        data = state['extracted_data']
-        lang = state.get('language', 'en')
+        # Let Claude generate the success message and summary
+        state['last_system_message'] = "[Receipt saved successfully]"
+        result = conversational.get_conversational_response(
+            user_message="[Receipt saved successfully]",
+            conversation_state=state,
+            whatsapp_handler=whatsapp
+        )
         
-        if lang == 'es':
-            confirmation = f"""{get_message(from_number, 'saved')}
-
-📝 Resumen:
-• Comercio: {data.get('merchant_name', 'N/A')}
-• Fecha: {data.get('date', 'N/A')}
-• Monto: ${data.get('total_amount', 'N/A')}
-• Categoría: {data.get('category', 'N/A')}
-• Propiedad: {data.get('cost_center', 'N/A')}
-• Pago: {data.get('payment_method', 'N/A')}
-
-{get_message(from_number, 'logged')}
-
-{get_message(from_number, 'send_another')}"""
-        else:
-            confirmation = f"""{get_message(from_number, 'saved')}
-
-📝 Summary:
-• Merchant: {data.get('merchant_name', 'N/A')}
-• Date: {data.get('date', 'N/A')}
-• Amount: ${data.get('total_amount', 'N/A')}
-• Category: {data.get('category', 'N/A')}
-• Property: {data.get('cost_center', 'N/A')}
-• Payment: {data.get('payment_method', 'N/A')}
-
-{get_message(from_number, 'logged')}
-
-{get_message(from_number, 'send_another')}"""
-        
-        whatsapp.send_message(from_number, confirmation)
+        whatsapp.send_message(from_number, result['response'])
         
         # Clear conversation state
         del conversation_states[from_number]
         
     except Exception as e:
         print(f"Error finalizing receipt: {str(e)}")
-        whatsapp.send_message(
-            from_number,
-            f"❌ Error saving receipt: {str(e)}\n\nPlease contact support."
+        import traceback
+        traceback.print_exc()
+        
+        # Let Claude handle error
+        result = conversational.get_conversational_response(
+            user_message="[Error saving receipt]",
+            conversation_state=state,
+            whatsapp_handler=whatsapp
         )
+        whatsapp.send_message(from_number, result['response'])
+
 
 @app.route('/health', methods=['GET'])
 def health():
     """Health check endpoint"""
     return jsonify({'status': 'healthy'})
+
 
 if __name__ == '__main__':
     port = int(os.getenv('PORT', 5000))

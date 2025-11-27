@@ -46,40 +46,25 @@ PERSONALITY:
 - Confident - you know what you're doing
 
 CURRENT SITUATION:
-You're helping process a receipt with these details:
-{json.dumps(extracted_data, indent=2)}
-
-WHAT WE NEED:
-- Category: What type of expense (Maintenance, Utilities, Repairs, Supplies, etc.)
-- Property/Unit: Which apartment/house/unit to charge this to
-
-We call the property/unit the "cost_center" internally, but NEVER use that term with users.
+{self._build_situation_context(conversation_state)}
 
 INSTRUCTIONS:
-1. Respond naturally in the user's language (Spanish, English, whatever they use)
-2. When user provides an answer, acknowledge it and IMMEDIATELY ask for the next missing field
-3. Flow: Category first → then Property/Unit
-4. If user seems uncertain ("I don't know", "you tell me"), suggest options based on the merchant
-5. If user gives a clear answer, extract the value and ask for the NEXT thing we need
-6. Be conversational and helpful
-7. ALWAYS ask the next question in your response - don't just acknowledge
-
-Examples of good responses:
-User gives category: "Perfecto, 'Mantenimiento' para la categoría. Ahora, ¿para qué propiedad es este gasto?"
-User gives property: "Got it - Apartamento 45. [Move to finalize - don't ask anything]"
+1. ALWAYS respond in the user's language (detect from their messages)
+2. Be conversational and natural
+3. When processing a receipt:
+   - Ask for category first (Maintenance, Utilities, Repairs, Supplies, etc.)
+   - Then ask for property/unit (NEVER say "cost center")
+   - If user is uncertain, suggest options based on merchant
+4. When receipt is saved, provide a summary and encourage them to send another
+5. Handle errors gracefully
+6. For greetings when no receipt sent yet, ask them to send a receipt photo
 
 USER'S MESSAGE: "{user_message}"
 
-Respond naturally in user's language, acknowledge what they said, then ask for what's still missing.
-
-Include structured data as JSON at the end:
+Respond naturally in the user's language. If you need structured data, include JSON at the end:
 ```json
 {{"category": "value or null", "cost_center": "value or null"}}
-```
-
-Note: Use "cost_center" in JSON (our internal field name) but talk about "property" or "unit" with users.
-
-If the user is uncertain, suggest options but don't force values into the JSON."""
+```"""
 
         try:
             response = self.client.messages.create(
@@ -111,6 +96,60 @@ If the user is uncertain, suggest options but don't force values into the JSON."
                 'response': f"Got it. Continuing...",
                 'extracted_data': {current_question: user_message} if current_question else {}
             }
+    
+    def _build_situation_context(self, conversation_state):
+        """Build context description based on current state"""
+        state_type = conversation_state.get('state', 'new')
+        extracted_data = conversation_state.get('extracted_data', {})
+        
+        if state_type == 'new':
+            return "User just greeted you. They haven't sent a receipt yet. Ask them to send a receipt photo to get started."
+        
+        elif '[Receipt processed:' in conversation_state.get('last_system_message', ''):
+            merchant = extracted_data.get('merchant_name', 'Unknown')
+            amount = extracted_data.get('total_amount', '0.00')
+            has_category = bool(extracted_data.get('category'))
+            has_cost_center = bool(extracted_data.get('cost_center'))
+            
+            return f"""You're processing a receipt:
+Merchant: {merchant}
+Amount: ${amount}
+Date: {extracted_data.get('date', 'Unknown')}
+
+What we have:
+- Category: {'✅ ' + extracted_data.get('category') if has_category else '❌ Need to ask'}
+- Property/Unit: {'✅ ' + extracted_data.get('cost_center') if has_cost_center else '❌ Need to ask'}
+
+Ask for what's missing. Category first, then property/unit."""
+        
+        elif '[Receipt saved successfully]' in conversation_state.get('last_system_message', ''):
+            data = extracted_data
+            return f"""Receipt was just saved successfully!
+Provide a friendly summary and encourage them to send another receipt.
+
+Summary to share:
+• Merchant: {data.get('merchant_name', 'N/A')}
+• Amount: ${data.get('total_amount', 'N/A')}
+• Category: {data.get('category', 'N/A')}
+• Property: {data.get('cost_center', 'N/A')}
+• Saved to Google Sheets"""
+        
+        elif '[User sent a duplicate receipt]' in conversation_state.get('last_system_message', ''):
+            return "User sent a duplicate receipt. Ask if they want to process it anyway."
+        
+        elif '[Error' in conversation_state.get('last_system_message', ''):
+            return "There was an error. Apologize and ask them to try again or send a clearer photo."
+        
+        else:
+            # General case - processing receipt
+            has_category = bool(extracted_data.get('category'))
+            has_cost_center = bool(extracted_data.get('cost_center'))
+            
+            return f"""Processing receipt for {extracted_data.get('merchant_name', 'unknown merchant')}.
+Category: {'✅ Have it' if has_category else '❌ Need it'}
+Property: {'✅ Have it' if has_cost_center else '❌ Need it'}
+
+Ask for what's missing."""
     
     def _extract_json(self, text):
         """Extract JSON from response"""
