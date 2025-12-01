@@ -10,7 +10,7 @@ from whatsapp_handler import WhatsAppHandler
 from claude_handler import ClaudeHandler
 from sheets_handler import SheetsHandler
 from drive_handler import DriveHandler
-from conversational_helper import conversational
+from conversational_handler_v2 import conversational
 
 app = Flask(__name__)
 
@@ -32,29 +32,43 @@ drive = DriveHandler(
 # Store conversation states in memory (use Redis/DB in production)
 conversation_states = {}
 
-
-def detect_language(text):
-    """Simple language detection - Spanish or English"""
-    text_lower = text.lower()
-    spanish_words = ['hola', 'sí', 'si', 'no', 'gracias', 'por favor', 'qué', 'cuál', 'para', 'de', 'la', 'el', 'un', 'una']
-    
-    spanish_count = sum(1 for word in spanish_words if word in text_lower)
-    return 'es' if spanish_count > 0 else 'en'
+# Store learned patterns per user (use database in production)
+user_patterns = {}
 
 
-def get_loading_message(msg_type, language='es'):
-    """Get loading messages in user's language"""
-    messages = {
-        'processing': {
-            'es': '🔍 Procesando tu recibo...',
-            'en': '🔍 Processing your receipt...'
-        },
-        'saving': {
-            'es': '💾 Guardando recibo...',
-            'en': '💾 Saving receipt...'
+def get_user_state(phone_number):
+    """Get or create user state with memory"""
+    if phone_number not in conversation_states:
+        # Load learned patterns if they exist
+        patterns = user_patterns.get(phone_number, {})
+        
+        conversation_states[phone_number] = {
+            'state': 'new',
+            'conversation_history': [],
+            'learned_patterns': patterns,
+            'extracted_data': {}
         }
+    
+    return conversation_states[phone_number]
+
+
+def save_learned_pattern(phone_number, merchant, category, property_unit):
+    """Save learned pattern for future use"""
+    if phone_number not in user_patterns:
+        user_patterns[phone_number] = {}
+    
+    merchant_key = merchant.lower().strip()
+    user_patterns[phone_number][merchant_key] = {
+        'category': category,
+        'property': property_unit
     }
-    return messages.get(msg_type, {}).get(language, messages.get(msg_type, {}).get('es', ''))
+    
+    # Also update in conversation state
+    if phone_number in conversation_states:
+        conversation_states[phone_number]['learned_patterns'] = user_patterns[phone_number]
+    
+    # In production: Save to database here
+    print(f"💾 Learned pattern: {merchant} → {category} / {property_unit}")
 
 
 @app.route('/webhook', methods=['GET', 'POST'])
@@ -62,7 +76,6 @@ def webhook():
     """Handle Kapso webhook for incoming WhatsApp messages"""
     
     if request.method == 'GET':
-        # Webhook verification
         verify_token = request.args.get('hub.verify_token')
         challenge = request.args.get('hub.challenge')
         
@@ -70,7 +83,6 @@ def webhook():
             return challenge
         return 'Invalid verify token', 403
     
-    # Handle incoming message
     data = request.json
     print(f"Received webhook: {json.dumps(data, indent=2)}")
     
@@ -82,11 +94,8 @@ def webhook():
         from_number = message['from']
         message_type = message['type']
         
-        # Handle image messages (receipts)
         if message_type == 'image':
             handle_receipt_image(from_number, message)
-        
-        # Handle text messages
         elif message_type == 'text':
             handle_text_response(from_number, message['text']['body'])
         
@@ -102,15 +111,7 @@ def webhook():
 def handle_receipt_image(from_number, message):
     """Process receipt image from WhatsApp"""
     try:
-        # Get or create conversation state
-        if from_number not in conversation_states:
-            conversation_states[from_number] = {
-                'language': 'es',  # Default to Spanish
-                'state': 'new'
-            }
-        
-        state = conversation_states[from_number]
-        lang = state.get('language', 'es')
+        state = get_user_state(from_number)
         
         # Download image
         image_url = message['kapso']['media_url']
@@ -122,21 +123,24 @@ def handle_receipt_image(from_number, message):
         # Check for duplicate
         image_hash = hashlib.sha256(image_data).hexdigest()
         if sheets.is_duplicate(image_hash):
-            # Let Claude handle duplicate message naturally
             result = conversational.get_conversational_response(
                 user_message="[User sent a duplicate receipt]",
-                conversation_state=state,
-                whatsapp_handler=whatsapp
+                conversation_state=state
             )
             whatsapp.send_message(from_number, result['response'])
             state['awaiting_duplicate_confirmation'] = True
             state['pending_image'] = {'data': image_data, 'hash': image_hash}
             return
         
-        # Send loading message IMMEDIATELY
-        whatsapp.send_message(from_number, get_loading_message('processing', lang))
+        # Tell user we're processing
+        state['last_system_message'] = "[User just sent a receipt image, tell them you're processing it]"
+        result = conversational.get_conversational_response(
+            user_message="[User just sent a receipt image, tell them you're processing it]",
+            conversation_state=state
+        )
+        whatsapp.send_message(from_number, result['response'])
         
-        # Extract data using Claude (slow operation)
+        # Extract data
         extracted_data = claude.extract_receipt_data(image_data)
         
         # Store in state
@@ -144,26 +148,24 @@ def handle_receipt_image(from_number, message):
         state['image_data'] = image_data
         state['image_hash'] = image_hash
         state['extracted_data'] = extracted_data
+        state['last_system_message'] = "[Receipt processed]"
         
-        # Get conversational response from Claude
+        # Ask for category (Claude will check learned patterns)
         result = conversational.get_conversational_response(
-            user_message=f"[Receipt processed: {extracted_data.get('merchant_name')} for ${extracted_data.get('total_amount')}]",
-            conversation_state=state,
-            whatsapp_handler=whatsapp
+            user_message=f"[Receipt processed]",
+            conversation_state=state
         )
         
-        state['last_system_message'] = f"[Receipt processed: {extracted_data.get('merchant_name')} for ${extracted_data.get('total_amount')}]"
         whatsapp.send_message(from_number, result['response'])
         
     except Exception as e:
         print(f"Error handling receipt image: {str(e)}")
         import traceback
         traceback.print_exc()
-        # Let Claude handle error naturally
+        state = get_user_state(from_number)
         result = conversational.get_conversational_response(
             user_message="[Error processing receipt image]",
-            conversation_state=conversation_states.get(from_number, {'language': 'es'}),
-            whatsapp_handler=whatsapp
+            conversation_state=state
         )
         whatsapp.send_message(from_number, result['response'])
 
@@ -171,25 +173,13 @@ def handle_receipt_image(from_number, message):
 def handle_text_response(from_number, text):
     """Handle text responses from user"""
     
-    # Get or create conversation state
-    if from_number not in conversation_states:
-        conversation_states[from_number] = {
-            'language': detect_language(text),
-            'state': 'new'
-        }
+    state = get_user_state(from_number)
     
-    state = conversation_states[from_number]
-    
-    # Update language if not set
-    if 'language' not in state or state['language'] is None:
-        state['language'] = detect_language(text)
-    
-    # If user is new (no receipt sent yet), let Claude handle greeting
+    # If user is new (no receipt sent yet)
     if state.get('state') == 'new':
         result = conversational.get_conversational_response(
             user_message=text,
-            conversation_state=state,
-            whatsapp_handler=whatsapp
+            conversation_state=state
         )
         whatsapp.send_message(from_number, result['response'])
         return
@@ -197,47 +187,47 @@ def handle_text_response(from_number, text):
     # Handle duplicate confirmation
     if state.get('awaiting_duplicate_confirmation'):
         if text.lower() in ['yes', 'y', 'si', 'sí']:
-            # Process the pending receipt
             pending = state.pop('pending_image')
             state.pop('awaiting_duplicate_confirmation')
             
-            lang = state.get('language', 'es')
-            whatsapp.send_message(from_number, get_loading_message('processing', lang))
+            state['last_system_message'] = "[User confirmed duplicate, tell them you're processing it now]"
+            result = conversational.get_conversational_response(
+                user_message="[User confirmed duplicate, tell them you're processing it now]",
+                conversation_state=state
+            )
+            whatsapp.send_message(from_number, result['response'])
             
             extracted_data = claude.extract_receipt_data(pending['data'])
             state['state'] = 'collecting_info'
             state['image_data'] = pending['data']
             state['image_hash'] = pending['hash']
             state['extracted_data'] = extracted_data
+            state['last_system_message'] = "[Receipt processed]"
             
             result = conversational.get_conversational_response(
-                user_message=f"[User confirmed duplicate, processing receipt]",
-                conversation_state=state,
-                whatsapp_handler=whatsapp
+                user_message=f"[Receipt processed]",
+                conversation_state=state
             )
             whatsapp.send_message(from_number, result['response'])
         else:
-            # Cancelled
             state.pop('pending_image', None)
             state.pop('awaiting_duplicate_confirmation', None)
             result = conversational.get_conversational_response(
                 user_message="[User cancelled duplicate receipt]",
-                conversation_state=state,
-                whatsapp_handler=whatsapp
+                conversation_state=state
             )
             whatsapp.send_message(from_number, result['response'])
         return
     
-    # Handle collecting info with conversational AI
+    # Handle collecting info
     if state.get('state') == 'collecting_info':
-        # Get conversational response from Claude
+        # Get conversational response
         result = conversational.get_conversational_response(
             user_message=text,
-            conversation_state=state,
-            whatsapp_handler=whatsapp
+            conversation_state=state
         )
         
-        # Send the natural response
+        # Send response
         whatsapp.send_message(from_number, result['response'])
         
         # Update extracted data if Claude provided values
@@ -246,52 +236,69 @@ def handle_text_response(from_number, text):
                 if value:
                     state['extracted_data'][key] = value
         
-        # Check if we have everything we need
+        # Check if we have everything
         has_category = bool(state['extracted_data'].get('category'))
         has_cost_center = bool(state['extracted_data'].get('cost_center'))
         
-        # If we have both, finalize
+        # If we have both, save pattern and finalize
         if has_category and has_cost_center:
+            # LEARNING LOOP: Save the pattern
+            merchant = state['extracted_data'].get('merchant_name', '')
+            category = state['extracted_data'].get('category')
+            property_unit = state['extracted_data'].get('cost_center')
+            
+            if merchant and category and property_unit:
+                save_learned_pattern(from_number, merchant, category, property_unit)
+            
             finalize_receipt(from_number)
 
 
 def finalize_receipt(from_number):
     """Save receipt to Sheets"""
     state = conversation_states[from_number]
-    lang = state.get('language', 'es')
     
     try:
-        # Send loading message IMMEDIATELY
-        whatsapp.send_message(from_number, get_loading_message('saving', lang))
+        # Tell user we're saving
+        state['last_system_message'] = "[Tell user you're saving the receipt now]"
+        result = conversational.get_conversational_response(
+            user_message="[Tell user you're saving the receipt now]",
+            conversation_state=state
+        )
+        whatsapp.send_message(from_number, result['response'])
         
-        # Save to Google Sheets (slow operation)
+        # Save to Sheets
         state['extracted_data']['drive_url'] = 'N/A'
         state['extracted_data']['image_hash'] = state['image_hash']
         sheets.add_receipt(state['extracted_data'])
         
-        # Let Claude generate the success message and summary
+        # Success message
         state['last_system_message'] = "[Receipt saved successfully]"
         result = conversational.get_conversational_response(
             user_message="[Receipt saved successfully]",
-            conversation_state=state,
-            whatsapp_handler=whatsapp
+            conversation_state=state
         )
         
         whatsapp.send_message(from_number, result['response'])
         
-        # Clear conversation state
-        del conversation_states[from_number]
+        # Clear state but keep learned patterns and conversation history
+        learned_patterns = state.get('learned_patterns', {})
+        conversation_history = state.get('conversation_history', [])
+        
+        conversation_states[from_number] = {
+            'state': 'new',
+            'conversation_history': conversation_history,
+            'learned_patterns': learned_patterns,
+            'extracted_data': {}
+        }
         
     except Exception as e:
         print(f"Error finalizing receipt: {str(e)}")
         import traceback
         traceback.print_exc()
         
-        # Let Claude handle error
         result = conversational.get_conversational_response(
             user_message="[Error saving receipt]",
-            conversation_state=state,
-            whatsapp_handler=whatsapp
+            conversation_state=state
         )
         whatsapp.send_message(from_number, result['response'])
 
