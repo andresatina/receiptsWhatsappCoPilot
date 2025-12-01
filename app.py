@@ -127,8 +127,7 @@ def handle_receipt_image(from_number, message):
         if sheets.is_duplicate(image_hash):
             result = conversational.get_conversational_response(
                 user_message="[User sent a duplicate receipt]",
-                conversation_state=state,
-                is_system_message=True
+                conversation_state=state
             )
             whatsapp.send_message(from_number, result['response'])
             state['awaiting_duplicate_confirmation'] = True
@@ -139,8 +138,7 @@ def handle_receipt_image(from_number, message):
         state['last_system_message'] = "[User just sent a receipt image, tell them you're processing it]"
         result = conversational.get_conversational_response(
             user_message="[User just sent a receipt image, tell them you're processing it]",
-            conversation_state=state,
-            is_system_message=True
+            conversation_state=state
         )
         whatsapp.send_message(from_number, result['response'])
         
@@ -166,8 +164,7 @@ def handle_receipt_image(from_number, message):
         state = get_user_state(from_number)
         result = conversational.get_conversational_response(
             user_message="[Error processing receipt image]",
-            conversation_state=state,
-            is_system_message=True
+            conversation_state=state
         )
         whatsapp.send_message(from_number, result['response'])
 
@@ -190,8 +187,7 @@ def ask_for_missing_info(from_number, state):
         state['asked_for_category'] = True
         result = conversational.get_conversational_response(
             user_message="[Receipt processed]",
-            conversation_state=state,
-            is_system_message=True
+            conversation_state=state
         )
         whatsapp.send_message(from_number, result['response'])
     
@@ -199,8 +195,7 @@ def ask_for_missing_info(from_number, state):
         state['asked_for_property'] = True
         result = conversational.get_conversational_response(
             user_message="[Need property]",
-            conversation_state=state,
-            is_system_message=True
+            conversation_state=state
         )
         whatsapp.send_message(from_number, result['response'])
 
@@ -229,8 +224,7 @@ def handle_text_response(from_number, text):
             state['last_system_message'] = "[User confirmed duplicate, tell them you're processing it now]"
             result = conversational.get_conversational_response(
                 user_message="[User confirmed duplicate, tell them you're processing it now]",
-                conversation_state=state,
-                is_system_message=True
+                conversation_state=state
             )
             whatsapp.send_message(from_number, result['response'])
             
@@ -249,8 +243,7 @@ def handle_text_response(from_number, text):
             state.pop('awaiting_duplicate_confirmation', None)
             result = conversational.get_conversational_response(
                 user_message="[User cancelled duplicate receipt]",
-                conversation_state=state,
-                is_system_message=True
+                conversation_state=state
             )
             whatsapp.send_message(from_number, result['response'])
         return
@@ -304,8 +297,7 @@ def finalize_receipt(from_number):
         state['last_system_message'] = "[Tell user you're saving the receipt now]"
         result = conversational.get_conversational_response(
             user_message="[Tell user you're saving the receipt now]",
-            conversation_state=state,
-            is_system_message=True
+            conversation_state=state
         )
         whatsapp.send_message(from_number, result['response'])
         
@@ -318,8 +310,7 @@ def finalize_receipt(from_number):
         state['last_system_message'] = "[Receipt saved successfully]"
         result = conversational.get_conversational_response(
             user_message="[Receipt saved successfully]",
-            conversation_state=state,
-            is_system_message=True
+            conversation_state=state
         )
         
         whatsapp.send_message(from_number, result['response'])
@@ -344,8 +335,7 @@ def finalize_receipt(from_number):
         
         result = conversational.get_conversational_response(
             user_message="[Error saving receipt]",
-            conversation_state=state,
-            is_system_message=True
+            conversation_state=state
         )
         whatsapp.send_message(from_number, result['response'])
 

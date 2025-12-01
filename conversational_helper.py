@@ -13,14 +13,13 @@ class ConversationalHandler:
     def __init__(self):
         self.client = anthropic.Anthropic(api_key=os.getenv('CLAUDE_API_KEY'))
     
-    def get_conversational_response(self, user_message, conversation_state, is_system_message=False):
+    def get_conversational_response(self, user_message, conversation_state):
         """
         Get natural response from Claude with full conversation history
         
         Args:
-            user_message: What the user just said
+            user_message: What the user just said (or system directive)
             conversation_state: Full state with history and learned patterns
-            is_system_message: If True, this is a system directive (not actual user text)
         
         Returns:
             dict with 'response' and 'extracted_data'
@@ -37,38 +36,21 @@ class ConversationalHandler:
         # Build system prompt with personality + learned patterns
         system_prompt = self._build_system_prompt(conversation_state, learned_patterns, extracted_data)
         
-        # Only add to conversation history if not a system message
-        if not is_system_message:
-            conversation_history.append({
-                'role': 'user',
-                'content': user_message
-            })
-        else:
-            # For system messages, treat as instruction without adding to user history
-            # We'll handle this by injecting context directly into the system prompt
-            system_prompt += f"\n\nIMMEDIATE ACTION: {user_message}"
+        # Add current message to history
+        conversation_history.append({
+            'role': 'user',
+            'content': user_message
+        })
         
         # Keep last 10 messages for context (prevent token bloat)
         conversation_history = conversation_history[-10:]
         
         try:
-            # Build appropriate message list
-            if conversation_history:
-                messages_to_send = conversation_history
-            elif is_system_message:
-                # For system messages with no history, create a minimal exchange
-                messages_to_send = [
-                    {"role": "user", "content": "Hola"},
-                    {"role": "assistant", "content": "Hola! ¿Cómo puedo ayudarte?"}
-                ]
-            else:
-                messages_to_send = [{"role": "user", "content": user_message}]
-            
             response = self.client.messages.create(
                 model="claude-sonnet-4-20250514",
                 max_tokens=max_tokens,
                 system=system_prompt,
-                messages=messages_to_send
+                messages=conversation_history
             )
             
             # Debug logging
@@ -91,12 +73,11 @@ class ConversationalHandler:
             # Clean response (remove JSON)
             clean_response = self._clean_response(response_text)
             
-            # Add assistant response to history (only if not system message)
-            if not is_system_message:
-                conversation_history.append({
-                    'role': 'assistant',
-                    'content': clean_response
-                })
+            # Add assistant response to history
+            conversation_history.append({
+                'role': 'assistant',
+                'content': clean_response
+            })
             
             # Update conversation state
             conversation_state['conversation_history'] = conversation_history
