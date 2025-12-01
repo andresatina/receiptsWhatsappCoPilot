@@ -10,7 +10,7 @@ from whatsapp_handler import WhatsAppHandler
 from claude_handler import ClaudeHandler
 from sheets_handler import SheetsHandler
 from drive_handler import DriveHandler
-from conversational_handler_v2 import conversational
+from conversational_helper import conversational
 
 app = Flask(__name__)
 
