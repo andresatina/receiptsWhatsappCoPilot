@@ -174,10 +174,15 @@ RESPONSE RULES:
 8. Use "propiedad" or "apartamento" in Spanish, "property" or "unit" in English (NEVER "cost center")
 
 STRUCTURED DATA:
-Return JSON only when user provides category or property:
+When user provides category or property, include JSON for data extraction:
 ```json
 {{"category": "value or null", "cost_center": "value or null"}}
 ```
+
+CRITICAL: The JSON is for internal data extraction ONLY. Users must NEVER see the JSON.
+Always include your conversational response BEFORE any JSON.
+Example: "Which property is this for?" (user sees this)
+{{JSON here}} (system extracts this, user never sees it)
 
 Note: Use "cost_center" in JSON (internal field) but say "property/unit" to users."""
     
@@ -189,12 +194,24 @@ Note: Use "cost_center" in JSON (internal field) but say "property/unit" to user
             return "User greeted or no receipt sent. Ask for receipt photo (1 sentence)."
         
         elif '[User just sent a receipt image' in last_msg:
-            return "Say 'Procesando...' or 'Processing...' in user's language. Nothing else."
+            # Extract language preference from directive
+            if 'Spanish' in last_msg:
+                return "Say 'Procesando...' Nothing else."
+            elif 'English' in last_msg:
+                return "Say 'Processing...' Nothing else."
+            else:
+                return "Say 'Procesando...' or 'Processing...' in user's language. Nothing else."
         
         elif '[Tell user you\'re saving' in last_msg:
-            return "Say 'Guardando...' or 'Saving...' in user's language. Nothing else."
+            # Extract language preference from directive
+            if 'Spanish' in last_msg:
+                return "Say 'Guardando...' Nothing else."
+            elif 'English' in last_msg:
+                return "Say 'Saving...' Nothing else."
+            else:
+                return "Say 'Guardando...' or 'Saving...' in user's language. Nothing else."
         
-        elif '[Receipt processed]' in last_msg:
+        elif '[Receipt processed' in last_msg:
             merchant = extracted_data.get('merchant_name', 'Unknown')
             amount = extracted_data.get('total_amount', '0.00')
             has_category = bool(extracted_data.get('category'))
@@ -203,11 +220,11 @@ Note: Use "cost_center" in JSON (internal field) but say "property/unit" to user
             if has_category and has_cost_center:
                 return "Already have both category and property. This shouldn't happen - just acknowledge."
             elif has_category:
-                return f"Have category. Ask ONLY for property: '¿Qué propiedad?' (nothing else)"
+                return f"Receipt: {merchant}, ${amount}. Have category already. Ask ONLY for property: '¿Qué propiedad?' (nothing else)"
             elif has_cost_center:
-                return f"Have property. Ask ONLY for category with 3-5 options in bullets"
+                return f"Receipt: {merchant}, ${amount}. Have property already. Ask ONLY for category with 3-5 options in bullets"
             else:
-                return f"Receipt: {merchant}, ${amount}. Ask for category with 3-5 options in bullets. If learned pattern exists, suggest it first."
+                return f"Receipt: {merchant}, ${amount}. Ask for category with 3-5 merchant-appropriate options in bullets. If learned pattern exists, suggest it first."
         
         elif '[Receipt saved successfully]' in last_msg:
             data = extracted_data
@@ -254,19 +271,25 @@ Ask if they have another receipt (1 sentence)."""
         return None
     
     def _clean_response(self, text):
-        """Remove JSON blocks from response"""
-        cleaned = text
+        """Remove ALL JSON blocks from response - user should never see JSON"""
+        import re
         
-        if '```json' in text:
-            cleaned = text[:text.find('```json')].strip()
-        elif '{' in text and '}' in text:
-            json_start = text.rfind('{')
-            if json_start > len(text) * 0.6:
-                cleaned = text[:json_start].strip()
+        # Remove ```json blocks (with any content inside, including newlines)
+        text = re.sub(r'```json\s*\n.*?\n```', '', text, flags=re.DOTALL)
+        text = re.sub(r'```json.*?```', '', text, flags=re.DOTALL)
+        
+        # Remove standalone {...} objects anywhere in text
+        # This catches both {"key": "value"} and multi-line JSON
+        text = re.sub(r'\{[^{}]*\}', '', text)
+        
+        # Clean up extra whitespace and newlines left behind
+        text = re.sub(r'\n\s*\n+', '\n\n', text)  # Multiple newlines → double newline
+        
+        cleaned = text.strip()
         
         # CRITICAL: Never return empty string (causes Claude API errors)
         if not cleaned or not cleaned.strip():
-            return text  # Return original if cleaning would make it empty
+            return "Procesando..."  # Safe fallback
         
         return cleaned
 

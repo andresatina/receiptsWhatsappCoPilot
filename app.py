@@ -73,6 +73,36 @@ def save_learned_pattern(phone_number, merchant, category, property_unit):
     print(f"💾 Learned pattern: {merchant} → {category} / {property_unit}")
 
 
+def _detect_user_language(state):
+    """Detect user's preferred language from conversation history"""
+    conversation_history = state.get('conversation_history', [])
+    
+    # Check last few user messages for language hints
+    spanish_indicators = ['hola', 'gracias', 'sí', 'si', 'qué', 'bueno', 'apartamento', 'propiedad']
+    english_indicators = ['hello', 'hi', 'thanks', 'thank you', 'what', 'good', 'apartment', 'property']
+    
+    spanish_count = 0
+    english_count = 0
+    
+    for msg in conversation_history[-5:]:  # Check last 5 messages
+        if msg.get('role') == 'user':
+            content = msg.get('content', '').lower()
+            for word in spanish_indicators:
+                if word in content:
+                    spanish_count += 1
+            for word in english_indicators:
+                if word in content:
+                    english_count += 1
+    
+    # Default to Spanish if unclear (since you're in Colombia)
+    if spanish_count > english_count:
+        return "Spanish"
+    elif english_count > spanish_count:
+        return "English"
+    else:
+        return "Spanish"  # Default to Spanish
+
+
 @app.route('/webhook', methods=['GET', 'POST'])
 def webhook():
     """Handle Kapso webhook for incoming WhatsApp messages"""
@@ -135,9 +165,12 @@ def handle_receipt_image(from_number, message):
             return
         
         # IMPROVEMENT #3: Single "Procesando..." message (not multiple)
-        state['last_system_message'] = "[User just sent a receipt image, tell them you're processing it]"
+        # Detect user's language from conversation history
+        user_language = _detect_user_language(state)
+        
+        state['last_system_message'] = f"[User just sent a receipt image, tell them you're processing it in {user_language}]"
         result = conversational.get_conversational_response(
-            user_message="[User just sent a receipt image, tell them you're processing it]",
+            user_message=f"[User just sent a receipt image, tell them you're processing it in {user_language}]",
             conversation_state=state
         )
         whatsapp.send_message(from_number, result['response'])
@@ -171,33 +204,29 @@ def handle_receipt_image(from_number, message):
 
 def ask_for_missing_info(from_number, state):
     """
-    Ask for missing information ONCE - no repetition
-    IMPROVEMENT #1: Only ask what's needed
+    Ask for missing information ONCE - let conversational AI handle it naturally
     """
     has_category = bool(state['extracted_data'].get('category'))
     has_property = bool(state['extracted_data'].get('cost_center'))
     
-    # If we have both, shouldn't be here
+    # If we have both, finalize immediately
     if has_category and has_property:
         finalize_receipt(from_number)
         return
     
-    # Ask for what's missing
-    if not has_category and not state.get('asked_for_category'):
-        state['asked_for_category'] = True
-        result = conversational.get_conversational_response(
-            user_message="[Receipt processed]",
-            conversation_state=state
-        )
-        whatsapp.send_message(from_number, result['response'])
+    # Let conversational AI ask the questions with full context
+    # It will see what's missing and ask intelligently
+    result = conversational.get_conversational_response(
+        user_message="[Receipt processed, ask for what's missing]",
+        conversation_state=state
+    )
+    whatsapp.send_message(from_number, result['response'])
     
-    elif not has_property and not state.get('asked_for_property'):
+    # Track what we've asked for (prevent re-asking)
+    if not has_category:
+        state['asked_for_category'] = True
+    if not has_property:
         state['asked_for_property'] = True
-        result = conversational.get_conversational_response(
-            user_message="[Need property]",
-            conversation_state=state
-        )
-        whatsapp.send_message(from_number, result['response'])
 
 
 def handle_text_response(from_number, text):
@@ -293,10 +322,12 @@ def finalize_receipt(from_number):
     state = conversation_states[from_number]
     
     try:
-        # IMPROVEMENT #3: Single short "Guardando..." message
-        state['last_system_message'] = "[Tell user you're saving the receipt now]"
+        # IMPROVEMENT #3: Single short "Guardando..." message in user's language
+        user_language = _detect_user_language(state)
+        
+        state['last_system_message'] = f"[Tell user you're saving the receipt now in {user_language}]"
         result = conversational.get_conversational_response(
-            user_message="[Tell user you're saving the receipt now]",
+            user_message=f"[Tell user you're saving the receipt now in {user_language}]",
             conversation_state=state
         )
         whatsapp.send_message(from_number, result['response'])
