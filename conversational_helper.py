@@ -45,6 +45,23 @@ class ConversationalHandler:
         # Keep last 10 messages for context (prevent token bloat)
         conversation_history = conversation_history[-10:]
         
+        # CRITICAL: Filter out messages with empty content (Claude API requirement)
+        # Empty messages cause: "messages.X: all messages must have non-empty content"
+        conversation_history = [
+            msg for msg in conversation_history 
+            if msg.get('content', '').strip()
+        ]
+        
+        # Debug: Log conversation history to identify issues
+        print(f"📝 Conversation history ({len(conversation_history)} messages):")
+        for i, msg in enumerate(conversation_history):
+            content_preview = msg.get('content', '')[:50]
+            print(f"  {i}: {msg.get('role')} - {content_preview}...")
+        
+        # Ensure we have at least one message
+        if not conversation_history:
+            conversation_history = [{'role': 'user', 'content': user_message}]
+        
         try:
             response = self.client.messages.create(
                 model="claude-sonnet-4-20250514",
@@ -238,13 +255,20 @@ Ask if they have another receipt (1 sentence)."""
     
     def _clean_response(self, text):
         """Remove JSON blocks from response"""
+        cleaned = text
+        
         if '```json' in text:
-            return text[:text.find('```json')].strip()
+            cleaned = text[:text.find('```json')].strip()
         elif '{' in text and '}' in text:
             json_start = text.rfind('{')
             if json_start > len(text) * 0.6:
-                return text[:json_start].strip()
-        return text
+                cleaned = text[:json_start].strip()
+        
+        # CRITICAL: Never return empty string (causes Claude API errors)
+        if not cleaned or not cleaned.strip():
+            return text  # Return original if cleaning would make it empty
+        
+        return cleaned
 
 
 # Global instance
