@@ -52,10 +52,17 @@ class ConversationalHandler:
         conversation_history = conversation_history[-10:]
         
         try:
-            # If system message and no real conversation yet, use a minimal message list
-            messages_to_send = conversation_history if conversation_history else [
-                {"role": "user", "content": "Ready"}
-            ]
+            # Build appropriate message list
+            if conversation_history:
+                messages_to_send = conversation_history
+            elif is_system_message:
+                # For system messages with no history, create a minimal exchange
+                messages_to_send = [
+                    {"role": "user", "content": "Hola"},
+                    {"role": "assistant", "content": "Hola! ¿Cómo puedo ayudarte?"}
+                ]
+            else:
+                messages_to_send = [{"role": "user", "content": user_message}]
             
             response = self.client.messages.create(
                 model="claude-sonnet-4-20250514",
@@ -63,6 +70,18 @@ class ConversationalHandler:
                 system=system_prompt,
                 messages=messages_to_send
             )
+            
+            # Debug logging
+            print(f"Claude API Response - Stop reason: {response.stop_reason}")
+            print(f"Content blocks: {len(response.content) if response.content else 0}")
+            
+            # Handle empty responses
+            if not response.content or len(response.content) == 0:
+                print("ERROR: Claude returned empty response")
+                return {
+                    'response': "Procesando..." if 'processing' in str(conversation_state.get('last_system_message', '')).lower() else "Un momento...",
+                    'extracted_data': {}
+                }
             
             response_text = response.content[0].text
             
@@ -89,6 +108,11 @@ class ConversationalHandler:
             
         except Exception as e:
             print(f"Error in conversational response: {str(e)}")
+            print(f"Error type: {type(e).__name__}")
+            print(f"System prompt length: {len(system_prompt) if 'system_prompt' in locals() else 'N/A'}")
+            print(f"Messages count: {len(messages_to_send) if 'messages_to_send' in locals() else 'N/A'}")
+            import traceback
+            traceback.print_exc()
             return {
                 'response': "Disculpa, tengo problemas. ¿Puedes intentar de nuevo?",
                 'extracted_data': {}
