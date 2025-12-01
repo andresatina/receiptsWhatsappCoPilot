@@ -46,7 +46,9 @@ def get_user_state(phone_number):
             'state': 'new',
             'conversation_history': [],
             'learned_patterns': patterns,
-            'extracted_data': {}
+            'extracted_data': {},
+            'asked_for_category': False,  # Track what we've asked for
+            'asked_for_property': False
         }
     
     return conversation_states[phone_number]
@@ -109,7 +111,7 @@ def webhook():
 
 
 def handle_receipt_image(from_number, message):
-    """Process receipt image from WhatsApp"""
+    """Process receipt image from WhatsApp - OPTIMIZED FLOW"""
     try:
         state = get_user_state(from_number)
         
@@ -125,18 +127,20 @@ def handle_receipt_image(from_number, message):
         if sheets.is_duplicate(image_hash):
             result = conversational.get_conversational_response(
                 user_message="[User sent a duplicate receipt]",
-                conversation_state=state
+                conversation_state=state,
+                is_system_message=True
             )
             whatsapp.send_message(from_number, result['response'])
             state['awaiting_duplicate_confirmation'] = True
             state['pending_image'] = {'data': image_data, 'hash': image_hash}
             return
         
-        # Tell user we're processing
+        # IMPROVEMENT #3: Single "Procesando..." message (not multiple)
         state['last_system_message'] = "[User just sent a receipt image, tell them you're processing it]"
         result = conversational.get_conversational_response(
             user_message="[User just sent a receipt image, tell them you're processing it]",
-            conversation_state=state
+            conversation_state=state,
+            is_system_message=True
         )
         whatsapp.send_message(from_number, result['response'])
         
@@ -149,14 +153,11 @@ def handle_receipt_image(from_number, message):
         state['image_hash'] = image_hash
         state['extracted_data'] = extracted_data
         state['last_system_message'] = "[Receipt processed]"
+        state['asked_for_category'] = False
+        state['asked_for_property'] = False
         
-        # Ask for category (Claude will check learned patterns)
-        result = conversational.get_conversational_response(
-            user_message=f"[Receipt processed]",
-            conversation_state=state
-        )
-        
-        whatsapp.send_message(from_number, result['response'])
+        # IMPROVEMENT #1: Ask for missing info ONCE (check what we need)
+        ask_for_missing_info(from_number, state)
         
     except Exception as e:
         print(f"Error handling receipt image: {str(e)}")
@@ -165,13 +166,47 @@ def handle_receipt_image(from_number, message):
         state = get_user_state(from_number)
         result = conversational.get_conversational_response(
             user_message="[Error processing receipt image]",
-            conversation_state=state
+            conversation_state=state,
+            is_system_message=True
+        )
+        whatsapp.send_message(from_number, result['response'])
+
+
+def ask_for_missing_info(from_number, state):
+    """
+    Ask for missing information ONCE - no repetition
+    IMPROVEMENT #1: Only ask what's needed
+    """
+    has_category = bool(state['extracted_data'].get('category'))
+    has_property = bool(state['extracted_data'].get('cost_center'))
+    
+    # If we have both, shouldn't be here
+    if has_category and has_property:
+        finalize_receipt(from_number)
+        return
+    
+    # Ask for what's missing
+    if not has_category and not state.get('asked_for_category'):
+        state['asked_for_category'] = True
+        result = conversational.get_conversational_response(
+            user_message="[Receipt processed]",
+            conversation_state=state,
+            is_system_message=True
+        )
+        whatsapp.send_message(from_number, result['response'])
+    
+    elif not has_property and not state.get('asked_for_property'):
+        state['asked_for_property'] = True
+        result = conversational.get_conversational_response(
+            user_message="[Need property]",
+            conversation_state=state,
+            is_system_message=True
         )
         whatsapp.send_message(from_number, result['response'])
 
 
 def handle_text_response(from_number, text):
-    """Handle text responses from user"""
+    """Handle text responses from user - OPTIMIZED"""
     
     state = get_user_state(from_number)
     
@@ -186,14 +221,16 @@ def handle_text_response(from_number, text):
     
     # Handle duplicate confirmation
     if state.get('awaiting_duplicate_confirmation'):
-        if text.lower() in ['yes', 'y', 'si', 'sí']:
+        if text.lower() in ['yes', 'y', 'si', 'sí', 'si']:
             pending = state.pop('pending_image')
             state.pop('awaiting_duplicate_confirmation')
             
+            # Brief processing message
             state['last_system_message'] = "[User confirmed duplicate, tell them you're processing it now]"
             result = conversational.get_conversational_response(
                 user_message="[User confirmed duplicate, tell them you're processing it now]",
-                conversation_state=state
+                conversation_state=state,
+                is_system_message=True
             )
             whatsapp.send_message(from_number, result['response'])
             
@@ -203,32 +240,28 @@ def handle_text_response(from_number, text):
             state['image_hash'] = pending['hash']
             state['extracted_data'] = extracted_data
             state['last_system_message'] = "[Receipt processed]"
+            state['asked_for_category'] = False
+            state['asked_for_property'] = False
             
-            result = conversational.get_conversational_response(
-                user_message=f"[Receipt processed]",
-                conversation_state=state
-            )
-            whatsapp.send_message(from_number, result['response'])
+            ask_for_missing_info(from_number, state)
         else:
             state.pop('pending_image', None)
             state.pop('awaiting_duplicate_confirmation', None)
             result = conversational.get_conversational_response(
                 user_message="[User cancelled duplicate receipt]",
-                conversation_state=state
+                conversation_state=state,
+                is_system_message=True
             )
             whatsapp.send_message(from_number, result['response'])
         return
     
     # Handle collecting info
     if state.get('state') == 'collecting_info':
-        # Get conversational response
+        # IMPROVEMENT #4: Get conversational response and extract data
         result = conversational.get_conversational_response(
             user_message=text,
             conversation_state=state
         )
-        
-        # Send response
-        whatsapp.send_message(from_number, result['response'])
         
         # Update extracted data if Claude provided values
         if result['extracted_data']:
@@ -236,13 +269,13 @@ def handle_text_response(from_number, text):
                 if value:
                     state['extracted_data'][key] = value
         
-        # Check if we have everything
+        # Check what we have now
         has_category = bool(state['extracted_data'].get('category'))
-        has_cost_center = bool(state['extracted_data'].get('cost_center'))
+        has_property = bool(state['extracted_data'].get('cost_center'))
         
-        # If we have both, save pattern and finalize
-        if has_category and has_cost_center:
-            # LEARNING LOOP: Save the pattern
+        # IMPROVEMENT #4: No confirmation loop - just proceed
+        if has_category and has_property:
+            # We have everything - save and finalize
             merchant = state['extracted_data'].get('merchant_name', '')
             category = state['extracted_data'].get('category')
             property_unit = state['extracted_data'].get('cost_center')
@@ -251,18 +284,28 @@ def handle_text_response(from_number, text):
                 save_learned_pattern(from_number, merchant, category, property_unit)
             
             finalize_receipt(from_number)
+        else:
+            # IMPROVEMENT #1: Ask for what's still missing (only once)
+            # Send the response we got (might be asking for clarification)
+            whatsapp.send_message(from_number, result['response'])
+            
+            # If Claude didn't ask for the next thing, we ask
+            if has_category and not has_property and not state.get('asked_for_property'):
+                state['asked_for_property'] = True
+                # Claude should have asked in the response above, so we don't double-ask
 
 
 def finalize_receipt(from_number):
-    """Save receipt to Sheets"""
+    """Save receipt to Sheets - OPTIMIZED"""
     state = conversation_states[from_number]
     
     try:
-        # Tell user we're saving
+        # IMPROVEMENT #3: Single short "Guardando..." message
         state['last_system_message'] = "[Tell user you're saving the receipt now]"
         result = conversational.get_conversational_response(
             user_message="[Tell user you're saving the receipt now]",
-            conversation_state=state
+            conversation_state=state,
+            is_system_message=True
         )
         whatsapp.send_message(from_number, result['response'])
         
@@ -271,11 +314,12 @@ def finalize_receipt(from_number):
         state['extracted_data']['image_hash'] = state['image_hash']
         sheets.add_receipt(state['extracted_data'])
         
-        # Success message
+        # IMPROVEMENT #2: Concise success message with summary
         state['last_system_message'] = "[Receipt saved successfully]"
         result = conversational.get_conversational_response(
             user_message="[Receipt saved successfully]",
-            conversation_state=state
+            conversation_state=state,
+            is_system_message=True
         )
         
         whatsapp.send_message(from_number, result['response'])
@@ -288,7 +332,9 @@ def finalize_receipt(from_number):
             'state': 'new',
             'conversation_history': conversation_history,
             'learned_patterns': learned_patterns,
-            'extracted_data': {}
+            'extracted_data': {},
+            'asked_for_category': False,
+            'asked_for_property': False
         }
         
     except Exception as e:
@@ -298,7 +344,8 @@ def finalize_receipt(from_number):
         
         result = conversational.get_conversational_response(
             user_message="[Error saving receipt]",
-            conversation_state=state
+            conversation_state=state,
+            is_system_message=True
         )
         whatsapp.send_message(from_number, result['response'])
 
