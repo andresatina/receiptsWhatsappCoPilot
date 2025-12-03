@@ -131,21 +131,20 @@ class ConversationalHandler:
             return 200  # Default for follow-ups
     
     def _build_system_prompt(self, conversation_state, learned_patterns, extracted_data):
-        """Build system prompt with personality, context, and learned patterns"""
+        """Build system prompt with personality, context, and patterns"""
         
         # Get current state
         state_type = conversation_state.get('state', 'new')
         last_msg = conversation_state.get('last_system_message', '')
-        merchant = extracted_data.get('merchant_name', '').lower()
+        suggested_pattern = conversation_state.get('suggested_pattern')
         
-        # Build learned patterns context
+        # Build pattern suggestion context
         patterns_text = ""
-        if learned_patterns and merchant and merchant in learned_patterns:
-            pattern = learned_patterns[merchant]
+        if suggested_pattern:
             patterns_text = f"""
-LEARNED PATTERN for {merchant}:
-- Previously: Category="{pattern.get('category')}", Property="{pattern.get('property')}"
-- Suggest briefly: "Last time: {pattern.get('category')} / {pattern.get('property')}. Same?"
+PATTERN MATCH FOUND ({suggested_pattern['similarity']:.0f}% similarity):
+- Previously used: Category="{suggested_pattern['category']}", Cost Center="{suggested_pattern['cost_center']}"
+- Suggest briefly: "Last time: {suggested_pattern['category']} / {suggested_pattern['cost_center']}. Same?"
 """
         
         # Build situation context

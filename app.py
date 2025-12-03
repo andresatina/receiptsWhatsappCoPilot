@@ -11,6 +11,7 @@ from claude_handler import ClaudeHandler
 from sheets_handler import SheetsHandler
 from drive_handler import DriveHandler
 from conversational_helper import conversational
+from database_handler import DatabaseHandler
 
 app = Flask(__name__)
 
@@ -28,49 +29,58 @@ drive = DriveHandler(
     credentials_path='credentials.json',
     folder_id=os.getenv('GOOGLE_DRIVE_FOLDER_ID')
 )
+db = DatabaseHandler()  # PostgreSQL handler
 
-# Store conversation states in memory (use Redis/DB in production)
+# Store conversation states in memory (temporary, per session only)
+# Learned patterns now stored in PostgreSQL
 conversation_states = {}
-
-# Store learned patterns per user (use database in production)
-user_patterns = {}
 
 
 def get_user_state(phone_number):
-    """Get or create user state with memory"""
+    """Get or create user state - loads from database"""
     if phone_number not in conversation_states:
-        # Load learned patterns if they exist
-        patterns = user_patterns.get(phone_number, {})
+        # Ensure client exists in database
+        db.get_or_create_client(phone_number)
+        
+        # Load categories and cost centers from database
+        categories = db.get_categories(phone_number)
+        cost_centers = db.get_cost_centers(phone_number)
         
         conversation_states[phone_number] = {
             'state': 'new',
             'conversation_history': [],
-            'learned_patterns': patterns,
+            'categories': [c['name'] for c in categories],  # Available categories
+            'cost_centers': [cc['name'] for cc in cost_centers],  # Available cost centers
             'extracted_data': {},
-            'asked_for_category': False,  # Track what we've asked for
+            'asked_for_category': False,
             'asked_for_property': False
         }
     
     return conversation_states[phone_number]
 
 
-def save_learned_pattern(phone_number, merchant, category, property_unit):
-    """Save learned pattern for future use"""
-    if phone_number not in user_patterns:
-        user_patterns[phone_number] = {}
+def save_learned_pattern(phone_number, merchant, items_text, category, cost_center):
+    """Save learned pattern to database with item keywords"""
     
-    merchant_key = merchant.lower().strip()
-    user_patterns[phone_number][merchant_key] = {
-        'category': category,
-        'property': property_unit
-    }
+    # Extract keywords from items (simple approach - split and filter)
+    items_keywords = []
+    if items_text:
+        # Split by common separators, lowercase, remove numbers/prices
+        import re
+        words = re.split(r'[\n,\$\d\.\s]+', items_text.lower())
+        # Keep words longer than 2 chars
+        items_keywords = [w.strip() for w in words if len(w.strip()) > 2]
+        # Remove duplicates, keep unique
+        items_keywords = list(set(items_keywords))[:10]  # Max 10 keywords
     
-    # Also update in conversation state
-    if phone_number in conversation_states:
-        conversation_states[phone_number]['learned_patterns'] = user_patterns[phone_number]
-    
-    # In production: Save to database here
-    print(f"💾 Learned pattern: {merchant} → {category} / {property_unit}")
+    # Save to database
+    db.save_pattern(
+        client_id=phone_number,
+        merchant=merchant,
+        items_keywords=items_keywords,
+        category_name=category,
+        cost_center_name=cost_center
+    )
 
 
 def _detect_user_language(state):
@@ -204,7 +214,7 @@ def handle_receipt_image(from_number, message):
 
 def ask_for_missing_info(from_number, state):
     """
-    Ask for missing information ONCE - let conversational AI handle it naturally
+    Check database for patterns, suggest if found, otherwise ask
     """
     has_category = bool(state['extracted_data'].get('category'))
     has_property = bool(state['extracted_data'].get('cost_center'))
@@ -214,15 +224,37 @@ def ask_for_missing_info(from_number, state):
         finalize_receipt(from_number)
         return
     
-    # Let conversational AI ask the questions with full context
-    # It will see what's missing and ask intelligently
+    # Check for matching patterns in database
+    merchant = state['extracted_data'].get('merchant_name', '')
+    items_text = state['extracted_data'].get('items', '')
+    
+    if merchant and items_text:
+        # Extract keywords from current receipt items
+        import re
+        words = re.split(r'[\n,\$\d\.\s]+', items_text.lower())
+        items_keywords = [w.strip() for w in words if len(w.strip()) > 2]
+        items_keywords = list(set(items_keywords))[:10]
+        
+        # Find matching patterns
+        matches = db.find_matching_patterns(from_number, merchant, items_keywords)
+        
+        if matches and matches[0]['similarity'] >= 60:
+            # Good match found - add to state for conversational AI to use
+            best_match = matches[0]
+            state['suggested_pattern'] = {
+                'category': best_match['category_name'],
+                'cost_center': best_match['cost_center_name'],
+                'similarity': best_match['similarity']
+            }
+    
+    # Let conversational AI ask (will use suggested_pattern if available)
     result = conversational.get_conversational_response(
         user_message="[Receipt processed, ask for what's missing]",
         conversation_state=state
     )
     whatsapp.send_message(from_number, result['response'])
     
-    # Track what we've asked for (prevent re-asking)
+    # Track what we've asked for
     if not has_category:
         state['asked_for_category'] = True
     if not has_property:
@@ -299,11 +331,12 @@ def handle_text_response(from_number, text):
         if has_category and has_property:
             # We have everything - save and finalize
             merchant = state['extracted_data'].get('merchant_name', '')
+            items = state['extracted_data'].get('items', '')  # Get items text
             category = state['extracted_data'].get('category')
             property_unit = state['extracted_data'].get('cost_center')
             
             if merchant and category and property_unit:
-                save_learned_pattern(from_number, merchant, category, property_unit)
+                save_learned_pattern(from_number, merchant, items, category, property_unit)
             
             finalize_receipt(from_number)
         else:
