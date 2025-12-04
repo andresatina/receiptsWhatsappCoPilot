@@ -21,15 +21,9 @@ whatsapp = WhatsAppHandler(
     phone_number=os.getenv('WHATSAPP_PHONE_NUMBER')
 )
 claude = ClaudeHandler(api_key=os.getenv('CLAUDE_API_KEY'))
-sheets = SheetsHandler(
-    credentials_path='credentials.json',
-    sheet_id=os.getenv('GOOGLE_SHEET_ID')
-)
-drive = DriveHandler(
-    credentials_path='credentials.json',
-    folder_id=os.getenv('GOOGLE_DRIVE_FOLDER_ID')
-)
 db = DatabaseHandler()  # PostgreSQL handler
+
+# Note: sheets and drive handlers are now created per-company, not globally
 
 # Store conversation states in memory (temporary, per session only)
 # Learned patterns now stored in PostgreSQL
@@ -107,12 +101,17 @@ def save_learned_pattern(phone_number, merchant, items_text, category, cost_cent
 def clear_cache(phone_number):
     """Clear conversation cache for a specific user"""
     try:
-        state_key = f"user_state:{phone_number}"
-        user_states.delete(state_key)
-        return jsonify({
-            'status': 'success',
-            'message': f'Cache cleared for {phone_number}'
-        })
+        if phone_number in conversation_states:
+            del conversation_states[phone_number]
+            return jsonify({
+                'status': 'success',
+                'message': f'Cache cleared for {phone_number}'
+            })
+        else:
+            return jsonify({
+                'status': 'success',
+                'message': f'No cache found for {phone_number}'
+            })
     except Exception as e:
         return jsonify({
             'status': 'error',
@@ -123,11 +122,8 @@ def clear_cache(phone_number):
 def clear_all_cache():
     """Clear ALL conversation caches - use with caution"""
     try:
-        keys = user_states.keys("user_state:*")
-        count = 0
-        for key in keys:
-            user_states.delete(key)
-            count += 1
+        count = len(conversation_states)
+        conversation_states.clear()
         return jsonify({
             'status': 'success',
             'message': f'Cleared {count} user caches'
@@ -180,6 +176,17 @@ def handle_receipt_image(from_number, message):
     """Process receipt image from WhatsApp - OPTIMIZED FLOW"""
     try:
         state = get_user_state(from_number)
+        
+        # Get company-specific sheets handler
+        user = state['user']
+        if not user.get('google_sheet_id'):
+            whatsapp.send_message(from_number, "Your company doesn't have a Google Sheet configured yet. Please contact support.")
+            return
+        
+        sheets = SheetsHandler(
+            credentials_path='credentials.json',
+            sheet_id=user['google_sheet_id']
+        )
         
         # Download image
         image_url = message['kapso']['media_url']
@@ -382,6 +389,17 @@ def finalize_receipt(from_number):
     state = conversation_states[from_number]
     
     try:
+        # Get company-specific sheets handler
+        user = state['user']
+        if not user.get('google_sheet_id'):
+            whatsapp.send_message(from_number, "Your company doesn't have a Google Sheet configured yet. Please contact support.")
+            return
+        
+        sheets = SheetsHandler(
+            credentials_path='credentials.json',
+            sheet_id=user['google_sheet_id']
+        )
+        
         # IMPROVEMENT #3: Single short "Saving..." message
         state['last_system_message'] = "[Tell user you're saving the receipt now]"
         result = conversational.get_conversational_response(
