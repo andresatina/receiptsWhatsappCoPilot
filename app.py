@@ -218,6 +218,24 @@ def handle_receipt_image(from_number, message):
         # Extract data
         extracted_data = claude.extract_receipt_data(image_data)
         
+        # Check if it's a bank transfer
+        if extracted_data.get('is_bank_transfer'):
+            # Bank transfer detected - ask for beneficiary
+            state['state'] = 'collecting_beneficiary'
+            state['image_data'] = image_data
+            state['image_hash'] = image_hash
+            state['extracted_data'] = extracted_data
+            state['last_system_message'] = "[Bank transfer detected, ask who it was paid to]"
+            state['asked_for_category'] = False
+            state['asked_for_property'] = False
+            
+            result = conversational.get_conversational_response(
+                user_message="[Bank transfer detected, ask who it was paid to]",
+                conversation_state=state
+            )
+            whatsapp.send_message(from_number, result['response'])
+            return
+        
         # Store in state
         state['state'] = 'collecting_info'
         state['image_data'] = image_data
@@ -341,6 +359,17 @@ def handle_text_response(from_number, text):
                 conversation_state=state
             )
             whatsapp.send_message(from_number, result['response'])
+        return
+    
+    # Handle bank transfer beneficiary collection
+    if state.get('state') == 'collecting_beneficiary':
+        # User told us who the payment was to
+        state['extracted_data']['merchant_name'] = text
+        state['state'] = 'collecting_info'
+        state['last_system_message'] = "[Receipt processed]"
+        
+        # Now proceed with normal flow
+        ask_for_missing_info(from_number, state)
         return
     
     # Handle collecting info

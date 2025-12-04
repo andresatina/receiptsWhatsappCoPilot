@@ -159,9 +159,9 @@ AVAILABLE PROPERTIES/UNITS:
 {', '.join(cost_centers)}
 
 IMPORTANT: When user provides a property name, use fuzzy matching to find the closest match.
-- As an example:If user says "Mag 1103" and you have "Magno 1103", ask: "Did you mean 'Magno 1103'?"
-- As an example: If user says "1103" and you have "Magno 1103", ask: "Did you mean 'Magno 1103'?"
-- As an example: Always suggest the closest match from the available properties list
+- If user says "Mag 1103" and you have "Magno 1103", ask: "Did you mean 'Magno 1103'?"
+- If user says "1103" and you have "Magno 1103", ask: "Did you mean 'Magno 1103'?"
+- Always suggest the closest match from the available properties list
 - Extract the EXACT property name from the list (not what user typed)
 """
         
@@ -215,6 +215,10 @@ Note: Use "cost_center" in JSON (internal field) but say "property/unit" to user
         
         elif '[Tell user you\'re saving' in last_msg:
             return "Tell user you're saving the receipt. Keep it brief - just one or two words in their language."
+        
+        elif '[Bank transfer detected' in last_msg:
+            amount = extracted_data.get('total_amount', '0.00')
+            return f"Bank transfer detected, ${amount}. Ask user: 'Who was this payment to?' or 'What was this payment for?' - Get the beneficiary/purpose from them."
         
         elif '[Receipt processed' in last_msg:
             merchant = extracted_data.get('merchant_name', 'Unknown')
