@@ -78,7 +78,7 @@ class ConversationalHandler:
             if not response.content or len(response.content) == 0:
                 print("ERROR: Claude returned empty response")
                 return {
-                    'response': "Procesando..." if 'processing' in str(conversation_state.get('last_system_message', '')).lower() else "Un momento...",
+                    'response': "Processing...",
                     'extracted_data': {}
                 }
             
@@ -112,7 +112,7 @@ class ConversationalHandler:
             import traceback
             traceback.print_exc()
             return {
-                'response': "Disculpa, tengo problemas. ¿Puedes intentar de nuevo?",
+                'response': "Sorry, I'm having issues. Can you try again?",
                 'extracted_data': {}
             }
     
@@ -126,7 +126,7 @@ class ConversationalHandler:
         elif '[Receipt processed]' in last_msg:
             return 150  # Just asking for category
         elif 'processing' in last_msg.lower():
-            return 50   # Just "Procesando..."
+            return 50   # Just "Processing..."
         else:
             return 200  # Default for follow-ups
     
@@ -163,12 +163,11 @@ CURRENT SITUATION:
 {situation_text}
 
 RESPONSE RULES:
-1. Respond in user's language
-2. Keep same language throughout conversation
-3. Be brief - max 3 sentences per message (except final summary)
-4. When asking for category: list 1-2 options in bullet points, nothing more
-5. When asking for property: just ask "¿Qué propiedad?" or "Which property?"
-6. Accept user's answer immediately - don't confirm unless unclear
+1. Match the user's language naturally throughout the conversation
+2. Be brief - max 3 sentences per message (except final summary)
+3. When asking for category: list 3-5 options in bullet points
+4. When asking for property: just ask directly for the property/unit
+5. Accept user's answer immediately - don't confirm unless unclear
 
 
 STRUCTURED DATA:
@@ -192,22 +191,10 @@ Note: Use "cost_center" in JSON (internal field) but say "property/unit" to user
             return "User greeted or no receipt sent. Ask for receipt photo (1 sentence)."
         
         elif '[User just sent a receipt image' in last_msg:
-            # Extract language preference from directive
-            if 'Spanish' in last_msg:
-                return "Say 'Procesando...' Nothing else."
-            elif 'English' in last_msg:
-                return "Say 'Processing...' Nothing else."
-            else:
-                return "Say 'Procesando...' or 'Processing...' in user's language. Nothing else."
+            return "Tell user you're processing the receipt. Keep it brief - just one or two words in their language."
         
         elif '[Tell user you\'re saving' in last_msg:
-            # Extract language preference from directive
-            if 'Spanish' in last_msg:
-                return "Say 'Guardando...' Nothing else."
-            elif 'English' in last_msg:
-                return "Say 'Saving...' Nothing else."
-            else:
-                return "Say 'Guardando...' or 'Saving...' in user's language. Nothing else."
+            return "Tell user you're saving the receipt. Keep it brief - just one or two words in their language."
         
         elif '[Receipt processed' in last_msg:
             merchant = extracted_data.get('merchant_name', 'Unknown')
@@ -218,7 +205,7 @@ Note: Use "cost_center" in JSON (internal field) but say "property/unit" to user
             if has_category and has_cost_center:
                 return "Already have both category and property. This shouldn't happen - just acknowledge."
             elif has_category:
-                return f"Receipt: {merchant}, ${amount}. Have category already. Ask ONLY for property: '¿Qué propiedad?' (nothing else)"
+                return f"Receipt: {merchant}, ${amount}. Have category already. Ask ONLY for property unit/apartment (nothing else)"
             elif has_cost_center:
                 return f"Receipt: {merchant}, ${amount}. Have property already. Ask ONLY for category with 3-5 options in bullets"
             else:
@@ -226,11 +213,17 @@ Note: Use "cost_center" in JSON (internal field) but say "property/unit" to user
         
         elif '[Receipt saved successfully]' in last_msg:
             data = extracted_data
-            return f"""Provide summary (max 4 lines):
-✅ {data.get('merchant_name')} - ${data.get('total_amount')}
-• Categoría: {data.get('category')}
-• Propiedad: {data.get('cost_center')}
-Ask if they have another receipt (1 sentence)."""
+            return f"""IMPORTANT: You MUST provide a complete summary in this exact format:
+
+✅ Receipt saved successfully!
+
+Details:
+• Merchant: {data.get('merchant_name', 'Unknown')}
+• Amount: ${data.get('total_amount', '0.00')}
+• Category: {data.get('category', 'Unknown')}
+• Property: {data.get('cost_center', 'Unknown')}
+
+Then ask: "Do you have another receipt to process?" """
         
         elif '[User sent a duplicate receipt]' in last_msg:
             return "Duplicate detected. Ask briefly if they want to process anyway."
@@ -239,7 +232,7 @@ Ask if they have another receipt (1 sentence)."""
             return "Error occurred. Apologize briefly, ask to try again."
         
         elif '[User confirmed duplicate' in last_msg:
-            return "Say 'Procesando...' Nothing else."
+            return "Tell user you're processing the receipt. Keep it brief."
         
         else:
             has_category = bool(extracted_data.get('category'))
@@ -248,7 +241,7 @@ Ask if they have another receipt (1 sentence)."""
             if not has_category:
                 return "Ask for category with 3-5 options in bullets. Be brief."
             elif not has_cost_center:
-                return "Ask for property: '¿Qué propiedad?' (1 sentence)"
+                return "Ask for property/unit (1 sentence)"
             else:
                 return "Have both. This shouldn't happen."
     
@@ -287,7 +280,7 @@ Ask if they have another receipt (1 sentence)."""
         
         # CRITICAL: Never return empty string (causes Claude API errors)
         if not cleaned or not cleaned.strip():
-            return "Procesando..."  # Safe fallback
+            return "..."  # Safe neutral fallback
         
         return cleaned
 

@@ -94,6 +94,44 @@ def save_learned_pattern(phone_number, merchant, items_text, category, cost_cent
 
 
 
+
+
+@app.route('/clear-cache/<phone_number>', methods=['POST'])
+def clear_cache(phone_number):
+    """Clear conversation cache for a specific user"""
+    try:
+        state_key = f"user_state:{phone_number}"
+        user_states.delete(state_key)
+        return jsonify({
+            'status': 'success',
+            'message': f'Cache cleared for {phone_number}'
+        })
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+
+@app.route('/clear-all-cache', methods=['POST'])
+def clear_all_cache():
+    """Clear ALL conversation caches - use with caution"""
+    try:
+        keys = user_states.keys("user_state:*")
+        count = 0
+        for key in keys:
+            user_states.delete(key)
+            count += 1
+        return jsonify({
+            'status': 'success',
+            'message': f'Cleared {count} user caches'
+        })
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+
+
 @app.route('/webhook', methods=['GET', 'POST'])
 def webhook():
     """Handle Kapso webhook for incoming WhatsApp messages"""
