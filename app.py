@@ -206,14 +206,16 @@ def ask_for_missing_info(from_number, state):
     merchant = state['extracted_data'].get('merchant_name', '')
     items_text = state['extracted_data'].get('items', '')
     
-    if merchant and items_text:
-        # Extract keywords from current receipt items
-        import re
-        words = re.split(r'[\n,\$\d\.\s]+', items_text.lower())
-        items_keywords = [w.strip() for w in words if len(w.strip()) > 2]
-        items_keywords = list(set(items_keywords))[:10]
+    if merchant:
+        # Extract keywords from current receipt items (if available)
+        items_keywords = []
+        if items_text:
+            import re
+            words = re.split(r'[\n,\$\d\.\s]+', items_text.lower())
+            items_keywords = [w.strip() for w in words if len(w.strip()) > 2]
+            items_keywords = list(set(items_keywords))[:10]
         
-        # Find matching patterns
+        # Find matching patterns (works even with empty items_keywords)
         matches = db.find_matching_patterns(from_number, merchant, items_keywords)
         
         if matches and matches[0]['similarity'] >= 60:

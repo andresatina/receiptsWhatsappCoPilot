@@ -138,8 +138,8 @@ class DatabaseHandler:
         with self.get_connection() as conn:
             cursor = conn.cursor(cursor_factory=RealDictCursor)
             
-            # Find patterns for this merchant with keyword overlap
-            # Using array overlap operator &&
+            # Find patterns for this merchant
+            # Match on merchant first, then calculate similarity
             cursor.execute(
                 """SELECT p.*, c.name as category_name, cc.name as cost_center_name,
                           array_length(p.items_keywords, 1) as keyword_count
@@ -148,23 +148,31 @@ class DatabaseHandler:
                    JOIN cost_centers cc ON p.cost_center_id = cc.id
                    WHERE p.client_id = %s 
                    AND LOWER(p.merchant) = LOWER(%s)
-                   AND p.items_keywords && %s
                    ORDER BY p.frequency DESC, p.last_used_at DESC
-                   LIMIT 5""",
-                (client_id, merchant, items_keywords)
+                   LIMIT 10""",
+                (client_id, merchant)
             )
             
             patterns = [dict(row) for row in cursor.fetchall()]
             
             # Calculate similarity for each pattern
             for pattern in patterns:
-                pattern_keywords = set(pattern['items_keywords'])
-                input_keywords = set(items_keywords)
+                pattern_keywords = set(pattern['items_keywords']) if pattern['items_keywords'] else set()
+                input_keywords = set(items_keywords) if items_keywords else set()
                 
-                # Jaccard similarity
-                intersection = len(pattern_keywords & input_keywords)
-                union = len(pattern_keywords | input_keywords)
-                pattern['similarity'] = (intersection / union * 100) if union > 0 else 0
+                # If both have items, calculate Jaccard similarity
+                if pattern_keywords and input_keywords:
+                    intersection = len(pattern_keywords & input_keywords)
+                    union = len(pattern_keywords | input_keywords)
+                    items_similarity = (intersection / union * 100) if union > 0 else 0
+                    # Merchant match + items match = higher confidence
+                    pattern['similarity'] = items_similarity
+                elif not pattern_keywords and not input_keywords:
+                    # Both empty items - merchant-only match
+                    pattern['similarity'] = 100  # Perfect merchant match
+                else:
+                    # One has items, other doesn't - partial match
+                    pattern['similarity'] = 50  # Merchant match only
             
             # Sort by similarity
             patterns.sort(key=lambda x: x['similarity'], reverse=True)

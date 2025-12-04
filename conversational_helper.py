@@ -163,14 +163,13 @@ CURRENT SITUATION:
 {situation_text}
 
 RESPONSE RULES:
-1. Respond in user's language (Spanish/English based on their messages)
+1. Respond in user's language
 2. Keep same language throughout conversation
-3. Be brief - max 2 sentences per message (except final summary)
-4. Don't explain options unless user asks
-5. When asking for category: list 3-5 options in bullet points, nothing more
-6. When asking for property: just ask "¿Qué propiedad?" or "Which property?"
-7. Accept user's answer immediately - don't confirm unless unclear
-8. Use "propiedad" or "apartamento" in Spanish, "property" or "unit" in English (NEVER "cost center")
+3. Be brief - max 3 sentences per message (except final summary)
+4. When asking for category: list 1-2 options in bullet points, nothing more
+5. When asking for property: just ask "¿Qué propiedad?" or "Which property?"
+6. Accept user's answer immediately - don't confirm unless unclear
+
 
 STRUCTURED DATA:
 When user provides category or property, include JSON for data extraction:
