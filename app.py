@@ -92,34 +92,6 @@ def save_learned_pattern(phone_number, merchant, items_text, category, cost_cent
     )
 
 
-def _detect_user_language(state):
-    """Detect user's preferred language from conversation history"""
-    conversation_history = state.get('conversation_history', [])
-    
-    # Check last few user messages for language hints
-    spanish_indicators = ['hola', 'gracias', 'sí', 'si', 'qué', 'bueno', 'apartamento', 'propiedad']
-    english_indicators = ['hello', 'hi', 'thanks', 'thank you', 'what', 'good', 'apartment', 'property']
-    
-    spanish_count = 0
-    english_count = 0
-    
-    for msg in conversation_history[-5:]:  # Check last 5 messages
-        if msg.get('role') == 'user':
-            content = msg.get('content', '').lower()
-            for word in spanish_indicators:
-                if word in content:
-                    spanish_count += 1
-            for word in english_indicators:
-                if word in content:
-                    english_count += 1
-    
-    # Default to Spanish if unclear (since you're in Colombia)
-    if spanish_count > english_count:
-        return "Spanish"
-    elif english_count > spanish_count:
-        return "English"
-    else:
-        return "Spanish"  # Default to Spanish
 
 
 @app.route('/webhook', methods=['GET', 'POST'])
@@ -183,13 +155,10 @@ def handle_receipt_image(from_number, message):
             state['pending_image'] = {'data': image_data, 'hash': image_hash}
             return
         
-        # IMPROVEMENT #3: Single "Procesando..." message (not multiple)
-        # Detect user's language from conversation history
-        user_language = _detect_user_language(state)
-        
-        state['last_system_message'] = f"[User just sent a receipt image, tell them you're processing it in {user_language}]"
+        # IMPROVEMENT #3: Single "Processing..." message (not multiple)
+        state['last_system_message'] = "[User just sent a receipt image, tell them you're processing it]"
         result = conversational.get_conversational_response(
-            user_message=f"[User just sent a receipt image, tell them you're processing it in {user_language}]",
+            user_message="[User just sent a receipt image, tell them you're processing it]",
             conversation_state=state
         )
         whatsapp.send_message(from_number, result['response'])
@@ -364,12 +333,10 @@ def finalize_receipt(from_number):
     state = conversation_states[from_number]
     
     try:
-        # IMPROVEMENT #3: Single short "Guardando..." message in user's language
-        user_language = _detect_user_language(state)
-        
-        state['last_system_message'] = f"[Tell user you're saving the receipt now in {user_language}]"
+        # IMPROVEMENT #3: Single short "Saving..." message
+        state['last_system_message'] = "[Tell user you're saving the receipt now]"
         result = conversational.get_conversational_response(
-            user_message=f"[Tell user you're saving the receipt now in {user_language}]",
+            user_message="[Tell user you're saving the receipt now]",
             conversation_state=state
         )
         whatsapp.send_message(from_number, result['response'])
