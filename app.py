@@ -242,7 +242,8 @@ def ask_for_missing_info(from_number, state):
     
     # Check for matching patterns in database
     merchant = state['extracted_data'].get('merchant_name', '')
-    items_text = state['extracted_data'].get('items', '')
+    line_items = state['extracted_data'].get('line_items', [])
+    items_text = '\n'.join([item.get('description', '') for item in line_items]) if line_items else ''
     
     if merchant:
         # Extract keywords from current receipt items (if available)
@@ -349,7 +350,8 @@ def handle_text_response(from_number, text):
         if has_category and has_property:
             # We have everything - save and finalize
             merchant = state['extracted_data'].get('merchant_name', '')
-            items = state['extracted_data'].get('items', '')  # Get items text
+            line_items = state['extracted_data'].get('line_items', [])
+            items = '\n'.join([item.get('description', '') for item in line_items]) if line_items else ''
             category = state['extracted_data'].get('category')
             property_unit = state['extracted_data'].get('cost_center')
             
