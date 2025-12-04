@@ -218,9 +218,26 @@ def handle_receipt_image(from_number, message):
         # Extract data
         extracted_data = claude.extract_receipt_data(image_data)
         
-        # Check if it's a bank transfer
+        # Check if it's a bank transfer (explicit flag)
         if extracted_data.get('is_bank_transfer'):
             # Bank transfer detected - ask for beneficiary
+            state['state'] = 'collecting_beneficiary'
+            state['image_data'] = image_data
+            state['image_hash'] = image_hash
+            state['extracted_data'] = extracted_data
+            state['last_system_message'] = "[Bank transfer detected, ask who it was paid to]"
+            state['asked_for_category'] = False
+            state['asked_for_property'] = False
+            
+            result = conversational.get_conversational_response(
+                user_message="[Bank transfer detected, ask who it was paid to]",
+                conversation_state=state
+            )
+            whatsapp.send_message(from_number, result['response'])
+            return
+        
+        # CRITICAL: If merchant is None/empty, treat as bank transfer (fallback)
+        if not extracted_data.get('merchant_name'):
             state['state'] = 'collecting_beneficiary'
             state['image_data'] = image_data
             state['image_hash'] = image_hash
