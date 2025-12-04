@@ -139,15 +139,31 @@ class ConversationalHandler:
         suggested_pattern = conversation_state.get('suggested_pattern')
         
         # Build pattern suggestion context
+        patterns_text = ""
         if suggested_pattern:
             patterns_text = f"""
-            PATTERN MATCH FOUND ({suggested_pattern['similarity']:.0f}% similarity):
-                - Previously used: Category="{suggested_pattern['category']}", Cost Center="{suggested_pattern['cost_center']}"
-                - ASK IMMEDIATELY: "Last time you used '{suggested_pattern['category']}' for this merchant. Use the same?"
-                - DO NOT list category options - just ask for confirmation
-                - If user says yes/same/correct, extract the suggested category immediately
-                - Only if user says no, then show 2-3 suggestions and ask what category they want instead
-                """
+PATTERN MATCH FOUND ({suggested_pattern['similarity']:.0f}% similarity):
+- Previously used: Category="{suggested_pattern['category']}", Cost Center="{suggested_pattern['cost_center']}"
+- ASK IMMEDIATELY: "Last time you used '{suggested_pattern['category']}' for this merchant. Use the same?"
+- DO NOT list category options - just ask for confirmation
+- If user says yes/same/correct, extract the suggested category immediately
+- Only if user says no, then ask what category they want instead
+"""
+        
+        # Build available properties context
+        cost_centers = conversation_state.get('cost_centers', [])
+        properties_text = ""
+        if cost_centers:
+            properties_text = f"""
+AVAILABLE PROPERTIES/UNITS:
+{', '.join(cost_centers)}
+
+IMPORTANT: When user provides a property name, use fuzzy matching to find the closest match.
+- As an example:If user says "Mag 1103" and you have "Magno 1103", ask: "Did you mean 'Magno 1103'?"
+- As an example: If user says "1103" and you have "Magno 1103", ask: "Did you mean 'Magno 1103'?"
+- As an example: Always suggest the closest match from the available properties list
+- Extract the EXACT property name from the list (not what user typed)
+"""
         
         # Build situation context
         situation_text = self._build_situation_context(conversation_state, last_msg, extracted_data)
@@ -160,6 +176,8 @@ PERSONALITY:
 - Keep responses under 2 sentences unless providing final summary
 
 {patterns_text}
+
+{properties_text}
 
 CURRENT SITUATION:
 {situation_text}
@@ -209,9 +227,9 @@ Note: Use "cost_center" in JSON (internal field) but say "property/unit" to user
             elif has_category:
                 return f"Receipt: {merchant}, ${amount}. Have category already. Ask ONLY for property unit/apartment (nothing else)"
             elif has_cost_center:
-                return f"Receipt: {merchant}, ${amount}. Have property already. Ask ONLY for category with 2-3 options in bullets"
+                return f"Receipt: {merchant}, ${amount}. Have property already. Ask ONLY for category with 3-5 options in bullets"
             else:
-                return f"Receipt: {merchant}, ${amount}. Ask for category with 2-3 merchant-appropriate options in bullets. If learned pattern exists, suggest it first."
+                return f"Receipt: {merchant}, ${amount}. Ask for category with 3-5 merchant-appropriate options in bullets. If learned pattern exists, suggest it first."
         
         elif '[Receipt saved successfully]' in last_msg:
             data = extracted_data
@@ -241,7 +259,7 @@ Then ask: "Do you have another receipt to process?" """
             has_cost_center = bool(extracted_data.get('cost_center'))
             
             if not has_category:
-                return "Ask for category with 2-3 options in bullets. Be brief."
+                return "Ask for category with 3-5 options in bullets. Be brief."
             elif not has_cost_center:
                 return "Ask for property/unit (1 sentence)"
             else:
