@@ -139,13 +139,15 @@ class ConversationalHandler:
         suggested_pattern = conversation_state.get('suggested_pattern')
         
         # Build pattern suggestion context
-        patterns_text = ""
         if suggested_pattern:
             patterns_text = f"""
-PATTERN MATCH FOUND ({suggested_pattern['similarity']:.0f}% similarity):
-- Previously used: Category="{suggested_pattern['category']}", Cost Center="{suggested_pattern['cost_center']}"
-- Suggest briefly: "Last time: {suggested_pattern['category']} / {suggested_pattern['cost_center']}. Same?"
-"""
+            PATTERN MATCH FOUND ({suggested_pattern['similarity']:.0f}% similarity):
+                - Previously used: Category="{suggested_pattern['category']}", Cost Center="{suggested_pattern['cost_center']}"
+                - ASK IMMEDIATELY: "Last time you used '{suggested_pattern['category']}' for this merchant. Use the same?"
+                - DO NOT list category options - just ask for confirmation
+                - If user says yes/same/correct, extract the suggested category immediately
+                - Only if user says no, then show 2-3 suggestions and ask what category they want instead
+                """
         
         # Build situation context
         situation_text = self._build_situation_context(conversation_state, last_msg, extracted_data)
@@ -165,7 +167,7 @@ CURRENT SITUATION:
 RESPONSE RULES:
 1. Match the user's language naturally throughout the conversation
 2. Be brief - max 3 sentences per message (except final summary)
-3. When asking for category: list 3-5 options in bullet points
+3. When asking for category: list 1-2 options in bullet points
 4. When asking for property: just ask directly for the property/unit
 5. Accept user's answer immediately - don't confirm unless unclear
 
@@ -207,9 +209,9 @@ Note: Use "cost_center" in JSON (internal field) but say "property/unit" to user
             elif has_category:
                 return f"Receipt: {merchant}, ${amount}. Have category already. Ask ONLY for property unit/apartment (nothing else)"
             elif has_cost_center:
-                return f"Receipt: {merchant}, ${amount}. Have property already. Ask ONLY for category with 3-5 options in bullets"
+                return f"Receipt: {merchant}, ${amount}. Have property already. Ask ONLY for category with 2-3 options in bullets"
             else:
-                return f"Receipt: {merchant}, ${amount}. Ask for category with 3-5 merchant-appropriate options in bullets. If learned pattern exists, suggest it first."
+                return f"Receipt: {merchant}, ${amount}. Ask for category with 2-3 merchant-appropriate options in bullets. If learned pattern exists, suggest it first."
         
         elif '[Receipt saved successfully]' in last_msg:
             data = extracted_data
@@ -239,7 +241,7 @@ Then ask: "Do you have another receipt to process?" """
             has_cost_center = bool(extracted_data.get('cost_center'))
             
             if not has_category:
-                return "Ask for category with 3-5 options in bullets. Be brief."
+                return "Ask for category with 2-3 options in bullets. Be brief."
             elif not has_cost_center:
                 return "Ask for property/unit (1 sentence)"
             else:
