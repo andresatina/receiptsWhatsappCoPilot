@@ -32,26 +32,31 @@ conversation_states = {}
 
 def get_user_state(phone_number):
     """Get or create user state - loads from database"""
+    
+    # ALWAYS refresh user data from database (to get latest company settings)
+    user = db.get_or_create_user(phone_number)
+    company_id = user['company_id']
+    
     if phone_number not in conversation_states:
-        # Get or create user (auto-assigned to Test Company if new)
-        user = db.get_or_create_user(phone_number)
-        company_id = user['company_id']
-        
-        # Load categories and cost centers from company
+        # First time - create new state
         categories = db.get_categories(company_id)
         cost_centers = db.get_cost_centers(company_id)
         
         conversation_states[phone_number] = {
             'state': 'new',
             'conversation_history': [],
-            'user': user,  # Store full user info including company details
+            'user': user,  # ✅ Store user
             'company_id': company_id,
-            'categories': [c['name'] for c in categories],  # Available categories
-            'cost_centers': [cc['name'] for cc in cost_centers],  # Available cost centers
+            'categories': [c['name'] for c in categories],
+            'cost_centers': [cc['name'] for cc in cost_centers],
             'extracted_data': {},
             'asked_for_category': False,
             'asked_for_property': False
         }
+    else:
+        # ✅ UPDATE: Refresh user data in existing state
+        conversation_states[phone_number]['user'] = user
+        conversation_states[phone_number]['company_id'] = company_id
     
     return conversation_states[phone_number]
 

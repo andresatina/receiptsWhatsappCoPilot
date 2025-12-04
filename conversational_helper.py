@@ -319,4 +319,3 @@ Then ask: "Do you have another receipt to process?" """
 
 # Global instance
 conversational = ConversationalHandler()
-# redeploy
