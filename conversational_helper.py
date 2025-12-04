@@ -138,6 +138,10 @@ class ConversationalHandler:
         last_msg = conversation_state.get('last_system_message', '')
         suggested_pattern = conversation_state.get('suggested_pattern')
         
+        # Get company-specific cost center label
+        user = conversation_state.get('user', {})
+        cost_center_label = user.get('cost_center_label', 'property/unit')
+        
         # Build pattern suggestion context
         patterns_text = ""
         if suggested_pattern:
@@ -155,18 +159,18 @@ PATTERN MATCH FOUND ({suggested_pattern['similarity']:.0f}% similarity):
         properties_text = ""
         if cost_centers:
             properties_text = f"""
-AVAILABLE PROPERTIES/UNITS:
+AVAILABLE COST CENTERS ({cost_center_label}):
 {', '.join(cost_centers)}
 
-IMPORTANT: When user provides a property name, use fuzzy matching to find the closest match.
-- If user says "Mag 1103" and you have "Magno 1103", ask: "Did you mean 'Magno 1103'?"
-- If user says "1103" and you have "Magno 1103", ask: "Did you mean 'Magno 1103'?"
-- Always suggest the closest match from the available properties list
-- Extract the EXACT property name from the list (not what user typed)
+IMPORTANT: When user provides a cost center name, use fuzzy matching to find the closest match.
+- If user says a shortened version, ask: "Did you mean '[full name]'?"
+- Always suggest the closest match from the available list
+- Extract the EXACT cost center name from the list (not what user typed)
+- When asking for cost center, use the term: "{cost_center_label}"
 """
         
         # Build situation context
-        situation_text = self._build_situation_context(conversation_state, last_msg, extracted_data)
+        situation_text = self._build_situation_context(conversation_state, last_msg, extracted_data, cost_center_label)
         
         return f"""You are Atina, an AI receipt assistant for property managers.
 
@@ -186,24 +190,24 @@ RESPONSE RULES:
 1. Match the user's language naturally throughout the conversation
 2. Be brief - max 3 sentences per message (except final summary)
 3. When asking for category: list 1-2 options in bullet points
-4. When asking for property: just ask directly for the property/unit
+4. When asking for cost center: use the term "{cost_center_label}" (NOT "property/unit" unless that's the label)
 5. Accept user's answer immediately - don't confirm unless unclear
 
 
 STRUCTURED DATA:
-When user provides category or property, include JSON for data extraction:
+When user provides category or cost center, include JSON for data extraction:
 ```json
 {{"category": "value or null", "cost_center": "value or null"}}
 ```
 
 CRITICAL: The JSON is for internal data extraction ONLY. Users must NEVER see the JSON.
 Always include your conversational response BEFORE any JSON.
-Example: "Which property is this for?" (user sees this)
+Example: "Which {cost_center_label.split('/')[0]} is this for?" (user sees this)
 {{JSON here}} (system extracts this, user never sees it)
 
-Note: Use "cost_center" in JSON (internal field) but say "property/unit" to users."""
+Note: Use "cost_center" in JSON (internal field) but say "{cost_center_label}" to users."""
     
-    def _build_situation_context(self, conversation_state, last_msg, extracted_data):
+    def _build_situation_context(self, conversation_state, last_msg, extracted_data, cost_center_label='property/unit'):
         """Build concise context based on current state"""
         state_type = conversation_state.get('state', 'new')
         
@@ -226,17 +230,21 @@ Note: Use "cost_center" in JSON (internal field) but say "property/unit" to user
             has_category = bool(extracted_data.get('category'))
             has_cost_center = bool(extracted_data.get('cost_center'))
             
+            # Get the first term from cost_center_label (e.g., "job" from "job/project")
+            cc_term = cost_center_label.split('/')[0]
+            
             if has_category and has_cost_center:
-                return "Already have both category and property. This shouldn't happen - just acknowledge."
+                return "Already have both category and cost center. This shouldn't happen - just acknowledge."
             elif has_category:
-                return f"Receipt: {merchant}, ${amount}. Have category already. Ask ONLY for property unit/apartment (nothing else)"
+                return f"Receipt: {merchant}, ${amount}. Have category already. Ask ONLY for {cc_term} (nothing else)"
             elif has_cost_center:
-                return f"Receipt: {merchant}, ${amount}. Have property already. Ask ONLY for category with 3-5 options in bullets"
+                return f"Receipt: {merchant}, ${amount}. Have {cc_term} already. Ask ONLY for category with 3-5 options in bullets"
             else:
                 return f"Receipt: {merchant}, ${amount}. Ask for category with 3-5 merchant-appropriate options in bullets. If learned pattern exists, suggest it first."
         
         elif '[Receipt saved successfully]' in last_msg:
             data = extracted_data
+            cc_term = cost_center_label.split('/')[0].capitalize()
             return f"""IMPORTANT: You MUST provide a complete summary in this exact format:
 
 ✅ Receipt saved successfully!
@@ -245,7 +253,7 @@ Details:
 • Merchant: {data.get('merchant_name', 'Unknown')}
 • Amount: ${data.get('total_amount', '0.00')}
 • Category: {data.get('category', 'Unknown')}
-• Property: {data.get('cost_center', 'Unknown')}
+• {cc_term}: {data.get('cost_center', 'Unknown')}
 
 Then ask: "Do you have another receipt to process?" """
         
