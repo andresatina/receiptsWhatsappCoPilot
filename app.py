@@ -62,6 +62,13 @@ def get_user_state(phone_number):
 def save_learned_pattern(phone_number, merchant, items_text, category, cost_center):
     """Save learned pattern to database with item keywords"""
     
+    # Debug: Log what we received
+    print(f"🔍 save_learned_pattern called:")
+    print(f"   merchant: {merchant}")
+    print(f"   items_text: '{items_text}'")
+    print(f"   category: {category}")
+    print(f"   cost_center: {cost_center}")
+    
     # Extract keywords from items (simple approach - split and filter)
     items_keywords = []
     if items_text:
@@ -72,6 +79,8 @@ def save_learned_pattern(phone_number, merchant, items_text, category, cost_cent
         items_keywords = [w.strip() for w in words if len(w.strip()) > 2]
         # Remove duplicates, keep unique
         items_keywords = list(set(items_keywords))[:10]  # Max 10 keywords
+    
+    print(f"   📝 Extracted keywords: {items_keywords}")
     
     # Save to database
     db.save_pattern(
