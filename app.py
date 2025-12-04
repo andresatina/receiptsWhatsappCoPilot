@@ -39,16 +39,19 @@ conversation_states = {}
 def get_user_state(phone_number):
     """Get or create user state - loads from database"""
     if phone_number not in conversation_states:
-        # Ensure client exists in database
-        db.get_or_create_client(phone_number)
+        # Get or create user (auto-assigned to Test Company if new)
+        user = db.get_or_create_user(phone_number)
+        company_id = user['company_id']
         
-        # Load categories and cost centers from database
-        categories = db.get_categories(phone_number)
-        cost_centers = db.get_cost_centers(phone_number)
+        # Load categories and cost centers from company
+        categories = db.get_categories(company_id)
+        cost_centers = db.get_cost_centers(company_id)
         
         conversation_states[phone_number] = {
             'state': 'new',
             'conversation_history': [],
+            'user': user,  # Store full user info including company details
+            'company_id': company_id,
             'categories': [c['name'] for c in categories],  # Available categories
             'cost_centers': [cc['name'] for cc in cost_centers],  # Available cost centers
             'extracted_data': {},
@@ -61,6 +64,10 @@ def get_user_state(phone_number):
 
 def save_learned_pattern(phone_number, merchant, items_text, category, cost_center):
     """Save learned pattern to database with item keywords"""
+    
+    # Get user's company_id
+    state = get_user_state(phone_number)
+    company_id = state['company_id']
     
     # Debug: Log what we received
     print(f"🔍 save_learned_pattern called:")
@@ -84,7 +91,7 @@ def save_learned_pattern(phone_number, merchant, items_text, category, cost_cent
     
     # Save to database
     db.save_pattern(
-        client_id=phone_number,
+        company_id=company_id,
         merchant=merchant,
         items_keywords=items_keywords,
         category_name=category,
@@ -254,8 +261,9 @@ def ask_for_missing_info(from_number, state):
             items_keywords = [w.strip() for w in words if len(w.strip()) > 2]
             items_keywords = list(set(items_keywords))[:10]
         
-        # Find matching patterns (works even with empty items_keywords)
-        matches = db.find_matching_patterns(from_number, merchant, items_keywords)
+        # Find matching patterns using company_id
+        company_id = state['company_id']
+        matches = db.find_matching_patterns(company_id, merchant, items_keywords)
         
         if matches and matches[0]['similarity'] >= 60:
             # Good match found - add to state for conversational AI to use
@@ -350,8 +358,7 @@ def handle_text_response(from_number, text):
         if has_category and has_property:
             # We have everything - save and finalize
             merchant = state['extracted_data'].get('merchant_name', '')
-            line_items = state['extracted_data'].get('line_items', [])
-            items = '\n'.join([item.get('description', '') for item in line_items]) if line_items else ''
+            items = state['extracted_data'].get('items', '')  # Get items text
             category = state['extracted_data'].get('category')
             property_unit = state['extracted_data'].get('cost_center')
             

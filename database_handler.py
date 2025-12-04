@@ -1,6 +1,6 @@
 """
-Database Handler for Client Knowledge Base
-Manages categories, cost centers, and learned patterns
+Database Handler for Companies and Users
+Manages companies, users, categories, cost centers, and learned patterns
 """
 
 import os
@@ -10,7 +10,7 @@ from contextlib import contextmanager
 
 
 class DatabaseHandler:
-    """Handles all PostgreSQL operations for client knowledge base"""
+    """Handles all PostgreSQL operations for companies and users"""
     
     def __init__(self, database_url=None):
         self.database_url = database_url or os.getenv('DATABASE_URL')
@@ -30,55 +30,105 @@ class DatabaseHandler:
         finally:
             conn.close()
     
-    # ============ CLIENT MANAGEMENT ============
+    # ============ USER MANAGEMENT ============
     
-    def get_or_create_client(self, phone_number, business_name=None):
-        """Get existing client or create new one"""
+    def get_or_create_user(self, phone_number, name=None):
+        """
+        Get existing user or create new one in Test Company
+        Returns user with company information
+        """
         with self.get_connection() as conn:
             cursor = conn.cursor(cursor_factory=RealDictCursor)
             
-            # Try to get existing
+            # Try to get existing user with company info
             cursor.execute(
-                "SELECT * FROM clients WHERE phone_number = %s",
+                """SELECT u.*, c.business_name, c.default_currency, c.default_language,
+                          c.google_sheet_id, c.google_drive_folder_id
+                   FROM users u
+                   JOIN companies c ON u.company_id = c.id
+                   WHERE u.phone_number = %s AND u.is_active = TRUE""",
                 (phone_number,)
             )
-            client = cursor.fetchone()
+            user = cursor.fetchone()
             
-            if not client:
-                # Create new client
+            if not user:
+                # Create new user in Test Company (id=1)
                 cursor.execute(
-                    """INSERT INTO clients (phone_number, business_name) 
-                       VALUES (%s, %s) RETURNING *""",
-                    (phone_number, business_name)
+                    """INSERT INTO users (phone_number, name, company_id) 
+                       VALUES (%s, %s, 1) 
+                       RETURNING id, phone_number, name, company_id, is_active""",
+                    (phone_number, name)
                 )
-                client = cursor.fetchone()
+                new_user = cursor.fetchone()
+                
+                # Get company info
+                cursor.execute(
+                    """SELECT u.*, c.business_name, c.default_currency, c.default_language,
+                              c.google_sheet_id, c.google_drive_folder_id
+                       FROM users u
+                       JOIN companies c ON u.company_id = c.id
+                       WHERE u.id = %s""",
+                    (new_user['id'],)
+                )
+                user = cursor.fetchone()
             
-            return dict(client)
+            return dict(user)
+    
+    # ============ COMPANY MANAGEMENT ============
+    
+    def create_company(self, business_name, default_currency='USD', default_language='en', 
+                      google_sheet_id=None, google_drive_folder_id=None):
+        """Create a new company"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            cursor.execute(
+                """INSERT INTO companies 
+                   (business_name, default_currency, default_language, google_sheet_id, google_drive_folder_id)
+                   VALUES (%s, %s, %s, %s, %s) RETURNING *""",
+                (business_name, default_currency, default_language, google_sheet_id, google_drive_folder_id)
+            )
+            return dict(cursor.fetchone())
+    
+    def update_user_company(self, phone_number, company_id):
+        """Move user to a different company"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE users SET company_id = %s WHERE phone_number = %s",
+                (company_id, phone_number)
+            )
+    
+    def get_company(self, company_id):
+        """Get company details"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            cursor.execute("SELECT * FROM companies WHERE id = %s", (company_id,))
+            return dict(cursor.fetchone())
     
     # ============ CATEGORIES (Chart of Accounts) ============
     
-    def get_categories(self, client_id):
-        """Get all categories for a client"""
+    def get_categories(self, company_id):
+        """Get all categories for a company"""
         with self.get_connection() as conn:
             cursor = conn.cursor(cursor_factory=RealDictCursor)
             cursor.execute(
-                "SELECT * FROM categories WHERE client_id = %s ORDER BY name",
-                (client_id,)
+                "SELECT * FROM categories WHERE company_id = %s ORDER BY name",
+                (company_id,)
             )
             return [dict(row) for row in cursor.fetchall()]
     
-    def add_category(self, client_id, category_name):
+    def add_category(self, company_id, category_name):
         """Add new category if it doesn't exist, return category id"""
         with self.get_connection() as conn:
             cursor = conn.cursor(cursor_factory=RealDictCursor)
             
             # Try to insert, ignore if duplicate
             cursor.execute(
-                """INSERT INTO categories (client_id, name) 
+                """INSERT INTO categories (company_id, name) 
                    VALUES (%s, %s) 
-                   ON CONFLICT (client_id, name) DO NOTHING
+                   ON CONFLICT (company_id, name) DO NOTHING
                    RETURNING id""",
-                (client_id, category_name)
+                (company_id, category_name)
             )
             result = cursor.fetchone()
             
@@ -87,34 +137,34 @@ class DatabaseHandler:
             
             # If no result, category already exists - fetch it
             cursor.execute(
-                "SELECT id FROM categories WHERE client_id = %s AND name = %s",
-                (client_id, category_name)
+                "SELECT id FROM categories WHERE company_id = %s AND name = %s",
+                (company_id, category_name)
             )
             return cursor.fetchone()['id']
     
     # ============ COST CENTERS ============
     
-    def get_cost_centers(self, client_id):
-        """Get all cost centers for a client"""
+    def get_cost_centers(self, company_id):
+        """Get all cost centers for a company"""
         with self.get_connection() as conn:
             cursor = conn.cursor(cursor_factory=RealDictCursor)
             cursor.execute(
-                "SELECT * FROM cost_centers WHERE client_id = %s ORDER BY name",
-                (client_id,)
+                "SELECT * FROM cost_centers WHERE company_id = %s ORDER BY name",
+                (company_id,)
             )
             return [dict(row) for row in cursor.fetchall()]
     
-    def add_cost_center(self, client_id, cost_center_name):
+    def add_cost_center(self, company_id, cost_center_name):
         """Add new cost center if it doesn't exist, return cost center id"""
         with self.get_connection() as conn:
             cursor = conn.cursor(cursor_factory=RealDictCursor)
             
             cursor.execute(
-                """INSERT INTO cost_centers (client_id, name) 
+                """INSERT INTO cost_centers (company_id, name) 
                    VALUES (%s, %s) 
-                   ON CONFLICT (client_id, name) DO NOTHING
+                   ON CONFLICT (company_id, name) DO NOTHING
                    RETURNING id""",
-                (client_id, cost_center_name)
+                (company_id, cost_center_name)
             )
             result = cursor.fetchone()
             
@@ -123,14 +173,14 @@ class DatabaseHandler:
             
             # If no result, cost center already exists - fetch it
             cursor.execute(
-                "SELECT id FROM cost_centers WHERE client_id = %s AND name = %s",
-                (client_id, cost_center_name)
+                "SELECT id FROM cost_centers WHERE company_id = %s AND name = %s",
+                (company_id, cost_center_name)
             )
             return cursor.fetchone()['id']
     
     # ============ PATTERNS (Learning) ============
     
-    def find_matching_patterns(self, client_id, merchant, items_keywords):
+    def find_matching_patterns(self, company_id, merchant, items_keywords):
         """
         Find patterns that match merchant and have similar items
         Returns patterns sorted by similarity
@@ -146,11 +196,11 @@ class DatabaseHandler:
                    FROM patterns p
                    JOIN categories c ON p.category_id = c.id
                    JOIN cost_centers cc ON p.cost_center_id = cc.id
-                   WHERE p.client_id = %s 
+                   WHERE p.company_id = %s 
                    AND LOWER(p.merchant) = LOWER(%s)
                    ORDER BY p.frequency DESC, p.last_used_at DESC
                    LIMIT 10""",
-                (client_id, merchant)
+                (company_id, merchant)
             )
             
             patterns = [dict(row) for row in cursor.fetchall()]
@@ -179,7 +229,7 @@ class DatabaseHandler:
             
             return patterns
     
-    def save_pattern(self, client_id, merchant, items_keywords, category_name, cost_center_name):
+    def save_pattern(self, company_id, merchant, items_keywords, category_name, cost_center_name):
         """
         Save or update a learned pattern
         Creates category and cost_center if they don't exist
@@ -188,21 +238,21 @@ class DatabaseHandler:
             cursor = conn.cursor()
             
             # Get or create category and cost center
-            category_id = self.add_category(client_id, category_name)
-            cost_center_id = self.add_cost_center(client_id, cost_center_name)
+            category_id = self.add_category(company_id, category_name)
+            cost_center_id = self.add_cost_center(company_id, cost_center_name)
             
             # Insert or update pattern
             cursor.execute(
                 """INSERT INTO patterns 
-                   (client_id, merchant, items_keywords, category_id, cost_center_id, frequency, last_used_at)
+                   (company_id, merchant, items_keywords, category_id, cost_center_id, frequency, last_used_at)
                    VALUES (%s, %s, %s, %s, %s, 1, CURRENT_TIMESTAMP)
-                   ON CONFLICT (client_id, merchant, category_id, cost_center_id) 
+                   ON CONFLICT (company_id, merchant, category_id, cost_center_id) 
                    DO UPDATE SET 
                        frequency = patterns.frequency + 1,
                        last_used_at = CURRENT_TIMESTAMP,
                        items_keywords = EXCLUDED.items_keywords
                    RETURNING id, frequency""",
-                (client_id, merchant.lower(), items_keywords, category_id, cost_center_id)
+                (company_id, merchant.lower(), items_keywords, category_id, cost_center_id)
             )
             
             result = cursor.fetchone()
@@ -212,21 +262,21 @@ class DatabaseHandler:
     
     # ============ BUSINESS RULES (Optional) ============
     
-    def add_business_rule(self, client_id, rule_text):
-        """Add a business rule for the client"""
+    def add_business_rule(self, company_id, rule_text):
+        """Add a business rule for the company"""
         with self.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "INSERT INTO business_rules (client_id, rule_text) VALUES (%s, %s)",
-                (client_id, rule_text)
+                "INSERT INTO business_rules (company_id, rule_text) VALUES (%s, %s)",
+                (company_id, rule_text)
             )
     
-    def get_business_rules(self, client_id):
-        """Get all business rules for a client"""
+    def get_business_rules(self, company_id):
+        """Get all business rules for a company"""
         with self.get_connection() as conn:
             cursor = conn.cursor(cursor_factory=RealDictCursor)
             cursor.execute(
-                "SELECT * FROM business_rules WHERE client_id = %s ORDER BY created_at",
-                (client_id,)
+                "SELECT * FROM business_rules WHERE company_id = %s ORDER BY created_at",
+                (company_id,)
             )
             return [dict(row) for row in cursor.fetchall()]
