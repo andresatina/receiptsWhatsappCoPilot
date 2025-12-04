@@ -20,7 +20,6 @@ class ClaudeHandler:
   "date": "date in YYYY-MM-DD format",
   "total_amount": "total amount as number (no currency symbols)",
   "payment_method": "payment method if visible (e.g., Cash, Credit Card, Debit)",
-  "is_bank_transfer": true or false,
   "line_items": [
     {
       "description": "item name",
@@ -34,12 +33,6 @@ IMPORTANT:
 - For total_amount, extract just the number without $ or other symbols
 - If a field is unclear or not visible, use null
 - Be accurate with the merchant name and date
-
-BANK TRANSFERS / WIRE TRANSFERS / DEPOSIT SLIPS:
-- Set "is_bank_transfer" to true if this is a bank transfer, wire transfer, deposit slip, or payment confirmation
-- If is_bank_transfer is true:
-  - Set "merchant_name" to null (we'll ask the user who it was paid to)
-  - Common bank names to watch for: Bank of America, Chase, Wells Fargo, Citibank, BBVA, Bancolombia, etc.
 
 Return ONLY valid JSON, no other text."""
 
@@ -89,6 +82,10 @@ Return ONLY valid JSON, no other text."""
     
     def _auto_categorize(self, merchant_name):
         """Auto-categorize expense based on merchant name"""
+        # Handle None or empty merchant name (e.g., bank transfers)
+        if not merchant_name:
+            return None
+            
         merchant_lower = merchant_name.lower()
         
         # Simple categorization logic
