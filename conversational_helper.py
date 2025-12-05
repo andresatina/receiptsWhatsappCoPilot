@@ -224,6 +224,17 @@ Note: Use "cost_center" in JSON (internal field) but say "{cost_center_label}" t
             amount = extracted_data.get('total_amount', '0.00')
             return f"Bank transfer detected, ${amount}. Ask user: 'Who was this payment to?' or 'What was this payment for?' - Get the beneficiary/purpose from them."
         
+        elif '[Receipt processed, ask for category only]' in last_msg:
+            merchant = extracted_data.get('merchant_name', 'Unknown')
+            amount = extracted_data.get('total_amount', '0.00')
+            return f"Receipt: {merchant}, ${amount}. Ask ONLY for category with 3-5 merchant-appropriate options in bullets. If learned pattern exists, suggest it first. DO NOT ask about cost center yet - one question at a time."
+        
+        elif '[Receipt processed, ask for cost_center only]' in last_msg:
+            merchant = extracted_data.get('merchant_name', 'Unknown')
+            amount = extracted_data.get('total_amount', '0.00')
+            cc_term = cost_center_label.split('/')[0]
+            return f"Receipt: {merchant}, ${amount}. Have category already. Ask ONLY for {cc_term}. DO NOT ask about category - we already have it."
+        
         elif '[Receipt processed' in last_msg:
             merchant = extracted_data.get('merchant_name', 'Unknown')
             amount = extracted_data.get('total_amount', '0.00')

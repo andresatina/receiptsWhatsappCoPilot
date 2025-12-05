@@ -285,6 +285,7 @@ def handle_receipt_image(from_number, message):
 def ask_for_missing_info(from_number, state):
     """
     Check database for patterns, suggest if found, otherwise ask
+    IMPORTANT: Only ask for ONE thing at a time (category OR cost_center, not both)
     """
     has_category = bool(state['extracted_data'].get('category'))
     has_property = bool(state['extracted_data'].get('cost_center'))
@@ -294,45 +295,53 @@ def ask_for_missing_info(from_number, state):
         finalize_receipt(from_number)
         return
     
-    # Check for matching patterns in database
-    merchant = state['extracted_data'].get('merchant_name', '')
-    line_items = state['extracted_data'].get('line_items', [])
-    items_text = '\n'.join([item.get('description', '') for item in line_items]) if line_items else ''
-    
-    if merchant:
-        # Extract keywords from current receipt items (if available)
-        items_keywords = []
-        if items_text:
-            import re
-            words = re.split(r'[\n,\$\d\.\s]+', items_text.lower())
-            items_keywords = [w.strip() for w in words if len(w.strip()) > 2]
-            items_keywords = list(set(items_keywords))[:10]
-        
-        # Find matching patterns using company_id
-        company_id = state['company_id']
-        matches = db.find_matching_patterns(company_id, merchant, items_keywords)
-        
-        if matches and matches[0]['similarity'] >= 60:
-            # Good match found - add to state for conversational AI to use
-            best_match = matches[0]
-            state['suggested_pattern'] = {
-                'category': best_match['category_name'],
-                'cost_center': best_match['cost_center_name'],
-                'similarity': best_match['similarity']
-            }
-    
-    # Let conversational AI ask (will use suggested_pattern if available)
-    result = conversational.get_conversational_response(
-        user_message="[Receipt processed, ask for what's missing]",
-        conversation_state=state
-    )
-    whatsapp.send_message(from_number, result['response'])
-    
-    # Track what we've asked for
+    # PRIORITY 1: Ask for category first (if missing)
     if not has_category:
+        # Check for matching patterns in database
+        merchant = state['extracted_data'].get('merchant_name', '')
+        line_items = state['extracted_data'].get('line_items', [])
+        items_text = '\n'.join([item.get('description', '') for item in line_items]) if line_items else ''
+        
+        if merchant:
+            # Extract keywords from current receipt items (if available)
+            items_keywords = []
+            if items_text:
+                import re
+                words = re.split(r'[\n,\$\d\.\s]+', items_text.lower())
+                items_keywords = [w.strip() for w in words if len(w.strip()) > 2]
+                items_keywords = list(set(items_keywords))[:10]
+            
+            # Find matching patterns using company_id
+            company_id = state['company_id']
+            matches = db.find_matching_patterns(company_id, merchant, items_keywords)
+            
+            if matches and matches[0]['similarity'] >= 60:
+                # Good match found - add to state for conversational AI to use
+                best_match = matches[0]
+                state['suggested_pattern'] = {
+                    'category': best_match['category_name'],
+                    'cost_center': best_match['cost_center_name'],
+                    'similarity': best_match['similarity']
+                }
+        
+        # Ask for category only
+        result = conversational.get_conversational_response(
+            user_message="[Receipt processed, ask for category only]",
+            conversation_state=state
+        )
+        whatsapp.send_message(from_number, result['response'])
         state['asked_for_category'] = True
+        return  # STOP HERE - wait for user response
+    
+    # PRIORITY 2: Ask for cost_center (only if category already exists)
     if not has_property:
+        result = conversational.get_conversational_response(
+            user_message="[Receipt processed, ask for cost_center only]",
+            conversation_state=state
+        )
+        whatsapp.send_message(from_number, result['response'])
         state['asked_for_property'] = True
+        return  # STOP HERE
 
 
 def handle_text_response(from_number, text):
