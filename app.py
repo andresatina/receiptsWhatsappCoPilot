@@ -13,6 +13,16 @@ from drive_handler import DriveHandler
 from conversational_helper import conversational
 from database_handler import DatabaseHandler
 
+import sentry_sdk
+from flask import Flask
+
+sentry_sdk.init(
+    dsn="https://9e06e082b0e4945ceb020c9bd31c9060@o4510482785632256.ingest.us.sentry.io/4510482827640832",
+    # Add data like request headers and IP for users,
+    # see https://docs.sentry.io/platforms/python/data-management/data-collected/ for more info
+    send_default_pii=True,
+)
+
 app = Flask(__name__)
 
 # Initialize handlers
