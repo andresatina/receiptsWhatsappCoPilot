@@ -12,6 +12,7 @@ from sheets_handler import SheetsHandler
 from drive_handler import DriveHandler
 from conversational_helper import conversational
 from database_handler import DatabaseHandler
+from logger import logger
 
 app = Flask(__name__)
 
@@ -220,8 +221,23 @@ def handle_receipt_image(from_number, message):
         )
         whatsapp.send_message(from_number, result['response'])
         
+        # Log receipt uploaded
+        logger.log_receipt_uploaded(
+            user_id=state['user']['id'],
+            company_id=state['company_id'],
+            receipt_hash=image_hash
+        )
+        
         # Extract data
         extracted_data = claude.extract_receipt_data(image_data)
+        
+        # Log OCR completed
+        logger.log_ocr_completed(
+            user_id=state['user']['id'],
+            company_id=state['company_id'],
+            receipt_hash=image_hash,
+            ocr_data=extracted_data
+        )
         
         # DEBUG: Log what was actually extracted
         print(f"🔍 OCR EXTRACTED DATA:")
@@ -277,10 +293,20 @@ def handle_receipt_image(from_number, message):
         ask_for_missing_info(from_number, state)
         
     except Exception as e:
+        # Log error
+        state = get_user_state(from_number)
+        logger.log_error(
+            error_type='receipt_processing_failed',
+            error_message=str(e),
+            user_id=state['user']['id'],
+            company_id=state['company_id'],
+            context={'image_url': message.get('kapso', {}).get('media_url')},
+            critical=True
+        )
+        
         print(f"Error handling receipt image: {str(e)}")
         import traceback
         traceback.print_exc()
-        state = get_user_state(from_number)
         result = conversational.get_conversational_response(
             user_message="[Error processing receipt image]",
             conversation_state=state
@@ -348,6 +374,12 @@ def handle_text_response(from_number, text):
     
     # If user is new (no receipt sent yet)
     if state.get('state') == 'new':
+        # Log conversation started
+        logger.log_conversation_started(
+            user_id=state['user']['id'],
+            company_id=state['company_id']
+        )
+        
         result = conversational.get_conversational_response(
             user_message=text,
             conversation_state=state
@@ -470,6 +502,17 @@ def finalize_receipt(from_number):
         state['extracted_data']['image_hash'] = state['image_hash']
         sheets.add_receipt(state['extracted_data'])
         
+        # Log receipt saved
+        logger.log_receipt_saved(
+            user_id=state['user']['id'],
+            company_id=state['company_id'],
+            receipt_hash=state['image_hash'],
+            merchant_name=state['extracted_data'].get('merchant_name', ''),
+            amount=state['extracted_data'].get('total_amount', 0),
+            category=state['extracted_data'].get('category', ''),
+            cost_center=state['extracted_data'].get('cost_center', '')
+        )
+        
         # IMPROVEMENT #2: Concise success message with summary
         state['last_system_message'] = "[Receipt saved successfully]"
         result = conversational.get_conversational_response(
@@ -479,29 +522,34 @@ def finalize_receipt(from_number):
         
         whatsapp.send_message(from_number, result['response'])
         
-        # Clear state but keep learned patterns and conversation history
-        learned_patterns = state.get('learned_patterns', {})
-        conversation_history = state.get('conversation_history', [])
-        
-        conversation_states[from_number] = {
-            'state': 'new',
-            'conversation_history': conversation_history,
-            'learned_patterns': learned_patterns,
-            'extracted_data': {},
-            'asked_for_category': False,
-            'asked_for_property': False
-        }
-        
     except Exception as e:
-        print(f"Error finalizing receipt: {str(e)}")
+        # Log error
+        logger.log_error(
+            error_type='sheets_save_failed',
+            error_message=str(e),
+            user_id=state['user']['id'],
+            company_id=state['company_id'],
+            context={'extracted_data': state.get('extracted_data')},
+            critical=True
+        )
+        
+        whatsapp.send_message(from_number, f"Sorry, there was an error saving your receipt: {str(e)}")
+        print(f"Error saving receipt: {str(e)}")
         import traceback
         traceback.print_exc()
-        
-        result = conversational.get_conversational_response(
-            user_message="[Error saving receipt]",
-            conversation_state=state
-        )
-        whatsapp.send_message(from_number, result['response'])
+    
+    # Clear state but keep learned patterns and conversation history
+    learned_patterns = state.get('learned_patterns', {})
+    conversation_history = state.get('conversation_history', [])
+    
+    conversation_states[from_number] = {
+        'state': 'new',
+        'conversation_history': conversation_history,
+        'learned_patterns': learned_patterns,
+        'extracted_data': {},
+        'asked_for_category': False,
+        'asked_for_property': False
+    }
 
 
 @app.route('/health', methods=['GET'])
