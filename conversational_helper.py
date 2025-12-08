@@ -42,15 +42,15 @@ class ConversationalHandler:
             'content': user_message
         })
         
-        # Keep last 10 messages for context (prevent token bloat)
-        conversation_history = conversation_history[-10:]
-        
         # CRITICAL: Filter out messages with empty content (Claude API requirement)
         # Empty messages cause: "messages.X: all messages must have non-empty content"
         conversation_history = [
             msg for msg in conversation_history 
             if msg.get('content', '').strip()
         ]
+        
+        # Token-based truncation (max ~6000 tokens for history, leaving room for system prompt)
+        conversation_history = self._truncate_by_tokens(conversation_history, max_tokens=6000)
         
         # Debug: Log conversation history to identify issues
         print(f"📝 Conversation history ({len(conversation_history)} messages):")
@@ -129,6 +129,78 @@ class ConversationalHandler:
             return 50   # Just "Processing..."
         else:
             return 200  # Default for follow-ups
+    
+    def _truncate_by_tokens(self, conversation_history, max_tokens=6000):
+        """
+        Truncate conversation history to stay under token limit
+        Strategy: Keep first 2 messages (greeting) + last N messages (recent context)
+        """
+        if len(conversation_history) <= 3:
+            return conversation_history  # Too short to truncate
+        
+        # Use Anthropic's token counter - need model to count
+        try:
+            count_response = self.client.messages.count_tokens(
+                model="claude-sonnet-4-20250514",
+                messages=conversation_history
+            )
+            total_tokens = count_response.input_tokens
+        except Exception as e:
+            print(f"⚠️  Token counting failed: {e}")
+            # Fallback: estimate ~4 chars per token
+            total_chars = sum(len(str(msg.get('content', ''))) for msg in conversation_history)
+            total_tokens = total_chars // 4
+        
+        print(f"🔢 Total tokens in history: {total_tokens}")
+        
+        if total_tokens <= max_tokens:
+            return conversation_history  # Under limit, keep everything
+        
+        # Strategy: Keep first 2 + progressively add from end until we hit limit
+        first_messages = conversation_history[:2]  # Keep greeting
+        remaining_messages = conversation_history[2:]
+        
+        # Start from most recent and work backwards
+        kept_messages = []
+        
+        try:
+            first_count = self.client.messages.count_tokens(
+                model="claude-sonnet-4-20250514",
+                messages=first_messages
+            ).input_tokens
+            current_tokens = first_count
+        except:
+            current_tokens = sum(len(str(msg.get('content', ''))) for msg in first_messages) // 4
+        
+        for msg in reversed(remaining_messages):
+            # Estimate tokens for this message
+            try:
+                msg_tokens = self.client.messages.count_tokens(
+                    model="claude-sonnet-4-20250514",
+                    messages=[msg]
+                ).input_tokens
+            except:
+                msg_tokens = len(str(msg.get('content', ''))) // 4
+            
+            if current_tokens + msg_tokens <= max_tokens:
+                kept_messages.insert(0, msg)  # Add to front (we're going backwards)
+                current_tokens += msg_tokens
+            else:
+                break  # Would exceed limit, stop here
+        
+        result = first_messages + kept_messages
+        
+        try:
+            final_tokens = self.client.messages.count_tokens(
+                model="claude-sonnet-4-20250514",
+                messages=result
+            ).input_tokens
+        except:
+            final_tokens = sum(len(str(msg.get('content', ''))) for msg in result) // 4
+        
+        print(f"✂️  Truncated: {len(conversation_history)} → {len(result)} messages ({total_tokens} → {final_tokens} tokens)")
+        
+        return result
     
     def _build_system_prompt(self, conversation_state, learned_patterns, extracted_data):
         """Build system prompt with personality, context, and patterns"""
