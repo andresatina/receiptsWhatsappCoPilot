@@ -497,10 +497,25 @@ def finalize_receipt(from_number):
         )
         whatsapp.send_message(from_number, result['response'])
         
-        # Save to Sheets
+        # Save to Sheets with retry logic
         state['extracted_data']['drive_url'] = 'N/A'
         state['extracted_data']['image_hash'] = state['image_hash']
-        sheets.add_receipt(state['extracted_data'])
+        
+        # Retry wrapper for Google Sheets API
+        from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+        from googleapiclient.errors import HttpError
+        import socket
+        
+        @retry(
+            stop=stop_after_attempt(3),  # Try 3 times
+            wait=wait_exponential(multiplier=1, min=2, max=10),  # 2s, 4s, 8s
+            retry=retry_if_exception_type((HttpError, socket.timeout, ConnectionError)),
+            reraise=True
+        )
+        def save_to_sheets_with_retry():
+            return sheets.add_receipt(state['extracted_data'])
+        
+        save_to_sheets_with_retry()
         
         # Log receipt saved
         logger.log_receipt_saved(

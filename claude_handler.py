@@ -1,12 +1,19 @@
 import anthropic
 import base64
 import json
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 class ClaudeHandler:
     def __init__(self, api_key):
         self.client = anthropic.Anthropic(api_key=api_key)
         self.model = "claude-sonnet-4-20250514"
     
+    @retry(
+        stop=stop_after_attempt(3),  # Try 3 times total
+        wait=wait_exponential(multiplier=1, min=2, max=10),  # Wait 2s, 4s, 8s
+        retry=retry_if_exception_type((anthropic.APIConnectionError, anthropic.APITimeoutError, anthropic.RateLimitError)),
+        reraise=True  # Raise the exception after final failure
+    )
     def extract_receipt_data(self, image_data):
         """Extract structured data from receipt image using Claude"""
         
