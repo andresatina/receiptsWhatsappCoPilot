@@ -83,6 +83,12 @@ def log_agent_action(state, action_phase, action_type, action_detail=None,
         success: Whether action succeeded
         metadata: Additional context
     """
+    # Initialize if missing (for existing conversation states)
+    if 'turn_number' not in state:
+        state['turn_number'] = 0
+    if 'conversation_id' not in state:
+        state['conversation_id'] = f"{state['user']['phone_number']}_{int(time.time())}"
+    
     # Increment turn for new actions (not observes)
     if action_phase == 'think':
         state['turn_number'] += 1
