@@ -134,6 +134,50 @@ class Logger:
                       amount=amount,
                       category=category,
                       cost_center=cost_center)
+    
+    def log_agent_action(self, user_id, company_id, turn_number, conversation_id,
+                        action_phase, action_type, action_detail=None,
+                        duration_ms=None, success=True, error_message=None,
+                        receipt_hash=None, metadata=None):
+        """
+        Log an agent action for Think-Act-Observe metrics
+        
+        Args:
+            user_id: User ID
+            company_id: Company ID
+            turn_number: Current turn in conversation (1, 2, 3...)
+            conversation_id: Unique ID for this conversation (e.g., phone_number + timestamp)
+            action_phase: 'think', 'act', or 'observe'
+            action_type: Specific action (e.g., 'ocr_extract', 'ask_category', 'save_receipt')
+            action_detail: Human-readable description
+            duration_ms: How long action took in milliseconds
+            success: Whether action succeeded
+            error_message: Error if failed
+            receipt_hash: Link to specific receipt
+            metadata: Additional context
+        """
+        try:
+            conn = psycopg2.connect(self.database_url)
+            cursor = conn.cursor()
+            
+            cursor.execute(
+                """INSERT INTO agent_actions 
+                   (user_id, company_id, turn_number, conversation_id, action_phase,
+                    action_type, action_detail, duration_ms, success, error_message,
+                    receipt_hash, metadata)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                (user_id, company_id, turn_number, conversation_id, action_phase,
+                 action_type, action_detail, duration_ms, success, error_message,
+                 receipt_hash, Json(metadata or {}))
+            )
+            
+            conn.commit()
+            conn.close()
+            
+            print(f"🤖 AGENT ACTION: Turn {turn_number} - {action_phase}:{action_type}")
+            
+        except Exception as e:
+            print(f"Failed to log agent action to database: {str(e)}")
 
 
 # Global instance

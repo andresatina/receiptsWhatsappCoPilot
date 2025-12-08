@@ -43,6 +43,10 @@ def get_user_state(phone_number):
         categories = db.get_categories(company_id)
         cost_centers = db.get_cost_centers(company_id)
         
+        # Generate conversation ID for tracking
+        import time
+        conversation_id = f"{phone_number}_{int(time.time())}"
+        
         conversation_states[phone_number] = {
             'state': 'new',
             'conversation_history': [],
@@ -52,7 +56,81 @@ def get_user_state(phone_number):
             'cost_centers': [cc['name'] for cc in cost_centers],
             'extracted_data': {},
             'asked_for_category': False,
-            'asked_for_property': False
+            'asked_for_property': False,
+            # NEW: Turn tracking
+            'turn_number': 0,
+            'conversation_id': conversation_id
+        }
+    else:
+        # ✅ UPDATE: Refresh user data in existing state
+        conversation_states[phone_number]['user'] = user
+        conversation_states[phone_number]['company_id'] = company_id
+    
+    return conversation_states[phone_number]
+
+
+def log_agent_action(state, action_phase, action_type, action_detail=None, 
+                     duration_ms=None, success=True, metadata=None):
+    """
+    Helper to log agent actions with automatic turn increment
+    
+    Args:
+        state: Conversation state dict
+        action_phase: 'think', 'act', 'observe'
+        action_type: Action identifier (e.g., 'ocr_extract', 'ask_category')
+        action_detail: Human-readable description
+        duration_ms: Duration in milliseconds
+        success: Whether action succeeded
+        metadata: Additional context
+    """
+    # Increment turn for new actions (not observes)
+    if action_phase == 'think':
+        state['turn_number'] += 1
+    
+    logger.log_agent_action(
+        user_id=state['user']['id'],
+        company_id=state['company_id'],
+        turn_number=state['turn_number'],
+        conversation_id=state['conversation_id'],
+        action_phase=action_phase,
+        action_type=action_type,
+        action_detail=action_detail,
+        duration_ms=duration_ms,
+        success=success,
+        receipt_hash=state.get('image_hash'),
+        metadata=metadata
+    )
+
+
+def get_user_state(phone_number):
+    """Get or create user state - loads from database"""
+    
+    # ALWAYS refresh user data from database (to get latest company settings)
+    user = db.get_or_create_user(phone_number)
+    company_id = user['company_id']
+    
+    if phone_number not in conversation_states:
+        # First time - create new state
+        categories = db.get_categories(company_id)
+        cost_centers = db.get_cost_centers(company_id)
+        
+        # Generate conversation ID for tracking
+        import time
+        conversation_id = f"{phone_number}_{int(time.time())}"
+        
+        conversation_states[phone_number] = {
+            'state': 'new',
+            'conversation_history': [],
+            'user': user,  # ✅ Store user
+            'company_id': company_id,
+            'categories': [c['name'] for c in categories],
+            'cost_centers': [cc['name'] for cc in cost_centers],
+            'extracted_data': {},
+            'asked_for_category': False,
+            'asked_for_property': False,
+            # NEW: Turn tracking
+            'turn_number': 0,
+            'conversation_id': conversation_id
         }
     else:
         # ✅ UPDATE: Refresh user data in existing state
@@ -180,8 +258,14 @@ def webhook():
 
 def handle_receipt_image(from_number, message):
     """Process receipt image from WhatsApp - OPTIMIZED FLOW"""
+    import time
+    
     try:
         state = get_user_state(from_number)
+        
+        # THINK: User sent receipt, need to process it
+        log_agent_action(state, 'think', 'receipt_received', 
+                        'User sent receipt image, will extract data')
         
         # Get company-specific sheets handler
         user = state['user']
@@ -194,12 +278,20 @@ def handle_receipt_image(from_number, message):
             sheet_id=user['google_sheet_id']
         )
         
-        # Download image
+        # ACT: Download image
+        start_time = time.time()
         image_url = message['kapso']['media_url']
         import requests
         response = requests.get(image_url)
         response.raise_for_status()
         image_data = response.content
+        download_ms = int((time.time() - start_time) * 1000)
+        
+        # OBSERVE: Image downloaded successfully
+        log_agent_action(state, 'observe', 'image_downloaded',
+                        f'Downloaded {len(image_data)} bytes',
+                        duration_ms=download_ms,
+                        metadata={'image_size': len(image_data)})
         
         # Check for duplicate
         image_hash = hashlib.sha256(image_data).hexdigest()
@@ -228,8 +320,20 @@ def handle_receipt_image(from_number, message):
             receipt_hash=image_hash
         )
         
-        # Extract data
+        # THINK: Need to extract receipt data
+        log_agent_action(state, 'think', 'need_ocr', 'Will extract data from receipt image')
+        
+        # ACT: Extract data with OCR
+        start_time = time.time()
         extracted_data = claude.extract_receipt_data(image_data)
+        ocr_ms = int((time.time() - start_time) * 1000)
+        
+        # OBSERVE: OCR completed
+        log_agent_action(state, 'observe', 'ocr_completed',
+                        f"Extracted: {extracted_data.get('merchant_name')} ${extracted_data.get('total_amount')}",
+                        duration_ms=ocr_ms,
+                        metadata={'merchant': extracted_data.get('merchant_name'),
+                                 'amount': extracted_data.get('total_amount')})
         
         # Log OCR completed
         logger.log_ocr_completed(
