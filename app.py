@@ -234,7 +234,10 @@ def clear_all_cache():
 @app.route('/webhook', methods=['GET', 'POST'])
 def webhook():
     """Handle Kapso webhook for incoming WhatsApp messages"""
-    
+    print("🔔 WEBHOOK HIT!")
+    print(f"Headers: {dict(request.headers)}")
+    print(f"Body preview: {request.get_data()[:500]}")
+
     if request.method == 'GET':
         verify_token = request.args.get('hub.verify_token')
         challenge = request.args.get('hub.challenge')
