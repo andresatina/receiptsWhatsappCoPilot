@@ -108,7 +108,7 @@ class ConversationalHandler:
             print(f"Error in conversational response: {str(e)}")
             print(f"Error type: {type(e).__name__}")
             print(f"System prompt length: {len(system_prompt) if 'system_prompt' in locals() else 'N/A'}")
-            print(f"Messages count: {len(messages_to_send) if 'messages_to_send' in locals() else 'N/A'}")
+            print(f"Messages count: {len(conversation_history) if 'conversation_history' in locals() else 'N/A'}")
             import traceback
             traceback.print_exc()
             return {
