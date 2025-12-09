@@ -63,9 +63,14 @@ def get_user_state(phone_number):
             'conversation_id': conversation_id
         }
     else:
-        # ✅ UPDATE: Refresh user data in existing state
+        # UPDATE: Refresh user data AND cost centers in existing state
+        categories = db.get_categories(company_id)
+        cost_centers = db.get_cost_centers(company_id)
+    
         conversation_states[phone_number]['user'] = user
         conversation_states[phone_number]['company_id'] = company_id
+        conversation_states[phone_number]['categories'] = [c['name'] for c in categories]
+        conversation_states[phone_number]['cost_centers'] = [cc['name'] for cc in cost_centers]
     
     return conversation_states[phone_number]
 
@@ -337,10 +342,9 @@ def handle_receipt_image(from_number, message):
         
         # OBSERVE: OCR completed
         log_agent_action(state, 'observe', 'ocr_completed',
-                        f"Extracted: {extracted_data.get('merchant_name')} ${extracted_data.get('total_amount')}",
-                        duration_ms=ocr_ms,
-                        metadata={'merchant': extracted_data.get('merchant_name'),
-                                 'amount': extracted_data.get('total_amount')})
+                f"Extracted: {extracted_data.get('merchant_name')} ${extracted_data.get('total_amount')}",
+                duration_ms=ocr_ms,
+                metadata=extracted_data)  # ✅ Store complete object with correct field names
         
         # Log OCR completed
         logger.log_ocr_completed(
