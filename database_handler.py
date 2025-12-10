@@ -178,6 +178,22 @@ class DatabaseHandler:
             )
             return cursor.fetchone()['id']
     
+    # ============ DUPLICATE DETECTION ============
+    
+    def is_duplicate(self, company_id, image_hash):
+        """Check if receipt with same hash already exists for this company"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """SELECT COUNT(*) FROM receipt_events 
+                   WHERE company_id = %s 
+                   AND receipt_hash = %s 
+                   AND event_type = 'receipt_saved'""",
+                (company_id, image_hash)
+            )
+            count = cursor.fetchone()[0]
+            return count > 0
+    
     # ============ PATTERNS (Learning) ============
     
     def find_matching_patterns(self, company_id, merchant, items_keywords):

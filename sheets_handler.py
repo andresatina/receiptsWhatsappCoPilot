@@ -37,7 +37,7 @@ class SheetsHandler:
             # Read first row
             result = self.sheet.values().get(
                 spreadsheetId=self.sheet_id,
-                range='A1:K1'
+                range='A1:I1'
             ).execute()
             
             values = result.get('values', [])
@@ -53,14 +53,12 @@ class SheetsHandler:
                     'Cost Center',
                     'Payment Method',
                     'Line Items',
-                    'Drive URL',
-                    'Image Hash',
                     'Submitted By'
                 ]
                 
                 self.sheet.values().update(
                     spreadsheetId=self.sheet_id,
-                    range='A1:K1',
+                    range='A1:I1',
                     valueInputOption='RAW',
                     body={'values': [headers]}
                 ).execute()
@@ -88,37 +86,14 @@ class SheetsHandler:
             data.get('cost_center', ''),
             data.get('payment_method', ''),
             line_items_str,
-            data.get('drive_url', ''),
-            data.get('image_hash', ''),
             data.get('submitted_by', '')
         ]
         
         # Append to sheet
         self.sheet.values().append(
             spreadsheetId=self.sheet_id,
-            range='A:K',
+            range='A:I',
             valueInputOption='RAW',
             insertDataOption='INSERT_ROWS',
             body={'values': [row]}
         ).execute()
-    
-    def is_duplicate(self, image_hash):
-        """Check if receipt with same hash already exists"""
-        try:
-            # Read all hashes (column J)
-            result = self.sheet.values().get(
-                spreadsheetId=self.sheet_id,
-                range='J:J'
-            ).execute()
-            
-            values = result.get('values', [])
-            
-            # Check if hash exists (skip header row)
-            for row in values[1:]:
-                if row and row[0] == image_hash:
-                    return True
-            
-            return False
-        except Exception as e:
-            print(f"Error checking duplicates: {str(e)}")
-            return False

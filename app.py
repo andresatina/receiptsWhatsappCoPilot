@@ -310,7 +310,7 @@ def handle_receipt_image(from_number, message):
         
         # Check for duplicate
         image_hash = hashlib.sha256(image_data).hexdigest()
-        if sheets.is_duplicate(image_hash):
+        if db.is_duplicate(state['company_id'], image_hash):
             result = conversational.get_conversational_response(
                 user_message="[User sent a duplicate receipt]",
                 conversation_state=state
@@ -616,8 +616,7 @@ def finalize_receipt(from_number):
         whatsapp.send_message(from_number, result['response'])
         
         # Save to Sheets with retry logic
-        state['extracted_data']['drive_url'] = 'N/A'
-        state['extracted_data']['image_hash'] = state['image_hash']
+        state['extracted_data']['submitted_by'] = user.get('name', from_number)
         
         # Retry wrapper for Google Sheets API
         from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
