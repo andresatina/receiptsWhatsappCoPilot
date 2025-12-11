@@ -6,6 +6,7 @@ from flask import Flask, request, jsonify
 import hashlib
 import json
 import time
+import posthog
 
 from whatsapp_handler import WhatsAppHandler
 from claude_handler import ClaudeHandler
@@ -16,6 +17,10 @@ from database_handler import DatabaseHandler
 from logger import logger
 
 app = Flask(__name__)
+
+# Initialize PostHog
+posthog.project_api_key = os.getenv('POSTHOG_API_KEY')
+posthog.host = 'https://us.i.posthog.com'
 
 # Initialize handlers
 whatsapp = WhatsAppHandler(
@@ -45,7 +50,6 @@ def get_user_state(phone_number):
         cost_centers = db.get_cost_centers(company_id)
         
         # Generate conversation ID for tracking
-        import time
         conversation_id = f"{phone_number}_{int(time.time())}"
         
         conversation_states[phone_number] = {
@@ -114,44 +118,6 @@ def log_agent_action(state, action_phase, action_type, action_detail=None,
     )
 
 
-def get_user_state(phone_number):
-    """Get or create user state - loads from database"""
-    
-    # ALWAYS refresh user data from database (to get latest company settings)
-    user = db.get_or_create_user(phone_number)
-    company_id = user['company_id']
-    
-    if phone_number not in conversation_states:
-        # First time - create new state
-        categories = db.get_categories(company_id)
-        cost_centers = db.get_cost_centers(company_id)
-        
-        # Generate conversation ID for tracking
-        import time
-        conversation_id = f"{phone_number}_{int(time.time())}"
-        
-        conversation_states[phone_number] = {
-            'state': 'new',
-            'conversation_history': [],
-            'user': user,  # ✅ Store user
-            'company_id': company_id,
-            'categories': [c['name'] for c in categories],
-            'cost_centers': [cc['name'] for cc in cost_centers],
-            'extracted_data': {},
-            'asked_for_category': False,
-            'asked_for_property': False,
-            # NEW: Turn tracking
-            'turn_number': 0,
-            'conversation_id': conversation_id
-        }
-    else:
-        # ✅ UPDATE: Refresh user data in existing state
-        conversation_states[phone_number]['user'] = user
-        conversation_states[phone_number]['company_id'] = company_id
-    
-    return conversation_states[phone_number]
-
-
 def save_learned_pattern(phone_number, merchant, items_text, category, cost_center):
     """Save learned pattern to database with item keywords"""
     
@@ -187,10 +153,6 @@ def save_learned_pattern(phone_number, merchant, items_text, category, cost_cent
         category_name=category,
         cost_center_name=cost_center
     )
-
-
-
-
 
 
 @app.route('/clear-cache/<phone_number>', methods=['POST'])
@@ -273,17 +235,16 @@ def webhook():
 
 def handle_receipt_image(from_number, message):
     """Process receipt image from WhatsApp - OPTIMIZED FLOW"""
-    import time
     
     try:
         state = get_user_state(from_number)
+        user = state['user']
         
         # THINK: User sent receipt, need to process it
         log_agent_action(state, 'think', 'receipt_received', 
                         'User sent receipt image, will extract data')
         
         # Get company-specific sheets handler
-        user = state['user']
         if not user.get('google_sheet_id'):
             whatsapp.send_message(from_number, "Your company doesn't have a Google Sheet configured yet. Please contact support.")
             return
@@ -318,6 +279,17 @@ def handle_receipt_image(from_number, message):
             whatsapp.send_message(from_number, result['response'])
             state['awaiting_duplicate_confirmation'] = True
             state['pending_image'] = {'data': image_data, 'hash': image_hash}
+            
+            # PostHog: Track duplicate
+            posthog.capture(
+                distinct_id=str(user['id']),
+                event='receipt_duplicate',
+                properties={
+                    'company_id': state['company_id'],
+                    'receipt_hash': image_hash
+                },
+                groups={'company': str(state['company_id'])}
+            )
             return
         
         # IMPROVEMENT #3: Single "Processing..." message (not multiple)
@@ -328,11 +300,24 @@ def handle_receipt_image(from_number, message):
         )
         whatsapp.send_message(from_number, result['response'])
         
-        # Log receipt uploaded
+        # Log receipt uploaded - Database
         logger.log_receipt_uploaded(
             user_id=state['user']['id'],
             company_id=state['company_id'],
             receipt_hash=image_hash
+        )
+        
+        # PostHog: Track receipt uploaded
+        posthog.capture(
+            distinct_id=str(user['id']),
+            event='receipt_uploaded',
+            properties={
+                'company_id': state['company_id'],
+                'receipt_hash': image_hash,
+                'image_size': len(image_data),
+                'download_ms': download_ms
+            },
+            groups={'company': str(state['company_id'])}
         )
         
         # THINK: Need to extract receipt data
@@ -349,12 +334,27 @@ def handle_receipt_image(from_number, message):
                 duration_ms=ocr_ms,
                 metadata=extracted_data)  # ✅ Store complete object with correct field names
         
-        # Log OCR completed
+        # Log OCR completed - Database
         logger.log_ocr_completed(
             user_id=state['user']['id'],
             company_id=state['company_id'],
             receipt_hash=image_hash,
             ocr_data=extracted_data
+        )
+        
+        # PostHog: Track OCR completed
+        posthog.capture(
+            distinct_id=str(user['id']),
+            event='ocr_completed',
+            properties={
+                'company_id': state['company_id'],
+                'receipt_hash': image_hash,
+                'merchant': extracted_data.get('merchant_name'),
+                'amount': extracted_data.get('total_amount'),
+                'ocr_ms': ocr_ms,
+                'is_bank_transfer': extracted_data.get('is_bank_transfer', False)
+            },
+            groups={'company': str(state['company_id'])}
         )
         
         # DEBUG: Log what was actually extracted
@@ -411,7 +411,7 @@ def handle_receipt_image(from_number, message):
         ask_for_missing_info(from_number, state)
         
     except Exception as e:
-        # Log error
+        # Log error - Database
         state = get_user_state(from_number)
         logger.log_error(
             error_type='receipt_processing_failed',
@@ -420,6 +420,18 @@ def handle_receipt_image(from_number, message):
             company_id=state['company_id'],
             context={'image_url': message.get('kapso', {}).get('media_url')},
             critical=True
+        )
+        
+        # PostHog: Track error
+        posthog.capture(
+            distinct_id=str(state['user']['id']),
+            event='error',
+            properties={
+                'error_type': 'receipt_processing_failed',
+                'error_message': str(e),
+                'company_id': state['company_id']
+            },
+            groups={'company': str(state['company_id'])}
         )
         
         print(f"Error handling receipt image: {str(e)}")
@@ -470,6 +482,20 @@ def ask_for_missing_info(from_number, state):
                 'cost_center': best_match['cost_center_name'],
                 'similarity': best_match['similarity']
             }
+            
+            # PostHog: Track pattern matched
+            posthog.capture(
+                distinct_id=str(state['user']['id']),
+                event='pattern_matched',
+                properties={
+                    'company_id': state['company_id'],
+                    'merchant': merchant,
+                    'similarity': best_match['similarity'],
+                    'category': best_match['category_name'],
+                    'cost_center': best_match['cost_center_name']
+                },
+                groups={'company': str(state['company_id'])}
+            )
     
     # Let conversational AI ask (will use suggested_pattern if available)
     result = conversational.get_conversational_response(
@@ -489,13 +515,24 @@ def handle_text_response(from_number, text):
     """Handle text responses from user - OPTIMIZED"""
     
     state = get_user_state(from_number)
+    user = state['user']
     
     # If user is new (no receipt sent yet)
     if state.get('state') == 'new':
-        # Log conversation started
+        # Log conversation started - Database
         logger.log_conversation_started(
             user_id=state['user']['id'],
             company_id=state['company_id']
+        )
+        
+        # PostHog: Track conversation started
+        posthog.capture(
+            distinct_id=str(user['id']),
+            event='conversation_started',
+            properties={
+                'company_id': state['company_id']
+            },
+            groups={'company': str(state['company_id'])}
         )
         
         result = conversational.get_conversational_response(
@@ -594,10 +631,10 @@ def handle_text_response(from_number, text):
 def finalize_receipt(from_number):
     """Save receipt to Sheets - OPTIMIZED"""
     state = conversation_states[from_number]
+    user = state['user']
     
     try:
         # Get company-specific sheets handler
-        user = state['user']
         if not user.get('google_sheet_id'):
             whatsapp.send_message(from_number, "Your company doesn't have a Google Sheet configured yet. Please contact support.")
             return
@@ -634,7 +671,7 @@ def finalize_receipt(from_number):
         
         save_to_sheets_with_retry()
         
-        # Log receipt saved
+        # Log receipt saved - Database
         logger.log_receipt_saved(
             user_id=state['user']['id'],
             company_id=state['company_id'],
@@ -643,6 +680,21 @@ def finalize_receipt(from_number):
             amount=state['extracted_data'].get('total_amount', 0),
             category=state['extracted_data'].get('category', ''),
             cost_center=state['extracted_data'].get('cost_center', '')
+        )
+        
+        # PostHog: Track receipt saved
+        posthog.capture(
+            distinct_id=str(user['id']),
+            event='receipt_saved',
+            properties={
+                'company_id': state['company_id'],
+                'receipt_hash': state['image_hash'],
+                'merchant': state['extracted_data'].get('merchant_name', ''),
+                'amount': state['extracted_data'].get('total_amount', 0),
+                'category': state['extracted_data'].get('category', ''),
+                'cost_center': state['extracted_data'].get('cost_center', '')
+            },
+            groups={'company': str(state['company_id'])}
         )
         
         # IMPROVEMENT #2: Concise success message with summary
@@ -655,7 +707,7 @@ def finalize_receipt(from_number):
         whatsapp.send_message(from_number, result['response'])
         
     except Exception as e:
-        # Log error
+        # Log error - Database
         logger.log_error(
             error_type='sheets_save_failed',
             error_message=str(e),
@@ -663,6 +715,18 @@ def finalize_receipt(from_number):
             company_id=state['company_id'],
             context={'extracted_data': state.get('extracted_data')},
             critical=True
+        )
+        
+        # PostHog: Track error
+        posthog.capture(
+            distinct_id=str(user['id']),
+            event='error',
+            properties={
+                'error_type': 'sheets_save_failed',
+                'error_message': str(e),
+                'company_id': state['company_id']
+            },
+            groups={'company': str(state['company_id'])}
         )
         
         whatsapp.send_message(from_number, f"Sorry, there was an error saving your receipt: {str(e)}")
