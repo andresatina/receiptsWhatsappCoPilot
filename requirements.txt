@@ -9,3 +9,4 @@ python-dotenv==1.0.0
 psycopg2-binary
 sentry-sdk[flask]==1.40.0
 tenacity==8.2.3
+posthog
