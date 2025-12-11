@@ -19,7 +19,7 @@ from logger import logger
 app = Flask(__name__)
 
 # Initialize PostHog
-posthog.project_api_key = os.getenv('POSTHOG_API_KEY')
+posthog.api_key = os.getenv('POSTHOG_API_KEY')
 posthog.host = 'https://us.i.posthog.com'
 
 # Initialize handlers
