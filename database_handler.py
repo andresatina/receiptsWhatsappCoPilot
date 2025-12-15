@@ -43,7 +43,8 @@ class DatabaseHandler:
             # Try to get existing user with company info
             cursor.execute(
                 """SELECT u.*, c.business_name, c.default_currency, c.default_language,
-                          c.google_sheet_id, c.google_drive_folder_id, c.cost_center_label
+                          c.google_sheet_id, c.google_drive_folder_id, c.cost_center_label,
+                          c.requires_cost_center
                    FROM users u
                    JOIN companies c ON u.company_id = c.id
                    WHERE u.phone_number = %s AND u.is_active = TRUE""",
@@ -64,7 +65,8 @@ class DatabaseHandler:
                 # Get company info
                 cursor.execute(
                     """SELECT u.*, c.business_name, c.default_currency, c.default_language,
-                              c.google_sheet_id, c.google_drive_folder_id, c.cost_center_label
+                              c.google_sheet_id, c.google_drive_folder_id, c.cost_center_label,
+                              c.requires_cost_center
                        FROM users u
                        JOIN companies c ON u.company_id = c.id
                        WHERE u.id = %s""",
@@ -142,6 +144,16 @@ class DatabaseHandler:
             )
             return cursor.fetchone()['id']
     
+    def delete_category(self, company_id, category_name):
+        """Delete a category by name. Returns True if deleted, False if not found."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "DELETE FROM categories WHERE company_id = %s AND LOWER(name) = LOWER(%s)",
+                (company_id, category_name)
+            )
+            return cursor.rowcount > 0
+    
     # ============ COST CENTERS ============
     
     def get_cost_centers(self, company_id):
@@ -177,6 +189,16 @@ class DatabaseHandler:
                 (company_id, cost_center_name)
             )
             return cursor.fetchone()['id']
+    
+    def delete_cost_center(self, company_id, cost_center_name):
+        """Delete a cost center by name. Returns True if deleted, False if not found."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "DELETE FROM cost_centers WHERE company_id = %s AND LOWER(name) = LOWER(%s)",
+                (company_id, cost_center_name)
+            )
+            return cursor.rowcount > 0
     
     # ============ DUPLICATE DETECTION ============
     

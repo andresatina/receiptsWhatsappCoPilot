@@ -14,6 +14,7 @@ from sheets_handler import SheetsHandler
 from drive_handler import DriveHandler
 from conversational_helper import conversational
 from database_handler import DatabaseHandler
+from management_handler import management_handler
 from logger import logger
 
 app = Flask(__name__)
@@ -449,7 +450,10 @@ def ask_for_missing_info(from_number, state):
     Check database for patterns, suggest if found, otherwise ask
     """
     has_category = bool(state['extracted_data'].get('category'))
-    has_property = bool(state['extracted_data'].get('cost_center'))
+    
+    # Skip cost center if company doesn't require it
+    requires_cost_center = state['user'].get('requires_cost_center', True)
+    has_property = True if not requires_cost_center else bool(state['extracted_data'].get('cost_center'))
     
     # If we have both, finalize immediately
     if has_category and has_property:
@@ -516,6 +520,24 @@ def handle_text_response(from_number, text):
     
     state = get_user_state(from_number)
     user = state['user']
+    
+    # Handle /manage command - enter management mode
+    if text.strip().lower() == '/manage':
+        state['state'] = 'managing'
+        state['pending_management_action'] = None
+        cost_center_label = user.get('cost_center_label', 'property/unit')
+        term = cost_center_label.split('/')[0]  # "property", "job", etc.
+        
+        whatsapp.send_message(from_number, f"🔧 Management mode. You can add, delete, or list {term}s and categories. Say 'done' when finished.")
+        return
+    
+    # Handle management mode
+    if state.get('state') == 'managing':
+        response, should_exit = management_handler.handle_management(text, state, db)
+        whatsapp.send_message(from_number, response)
+        if should_exit:
+            state['state'] = 'new'
+        return
     
     # If user is new (no receipt sent yet)
     if state.get('state') == 'new':
@@ -603,7 +625,10 @@ def handle_text_response(from_number, text):
         
         # Check what we have now
         has_category = bool(state['extracted_data'].get('category'))
-        has_property = bool(state['extracted_data'].get('cost_center'))
+        
+        # Skip cost center if company doesn't require it
+        requires_cost_center = state['user'].get('requires_cost_center', True)
+        has_property = True if not requires_cost_center else bool(state['extracted_data'].get('cost_center'))
         
         # IMPROVEMENT #4: No confirmation loop - just proceed
         if has_category and has_property:
