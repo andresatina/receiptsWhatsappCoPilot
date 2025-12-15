@@ -522,7 +522,7 @@ def handle_text_response(from_number, text):
     user = state['user']
     
     # Handle /manage command - enter management mode
-    if text.strip().lower() == '/manage':
+    if text.strip().lower().startswith('/manage'):
         state['state'] = 'managing'
         state['pending_management_action'] = None
         cost_center_label = user.get('cost_center_label', 'property/unit')

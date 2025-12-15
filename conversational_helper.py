@@ -5,6 +5,7 @@ Conversational Handler with Memory and Learning - IMPROVED UX
 import os
 import anthropic
 import json
+import re
 
 
 class ConversationalHandler:
@@ -226,10 +227,11 @@ PATTERN MATCH FOUND ({suggested_pattern['similarity']:.0f}% similarity):
 - Only if user says no, then ask what category they want instead
 """
         
-        # Build available properties context
+        # Build available properties context (only if company requires cost centers)
+        requires_cost_center = user.get('requires_cost_center', True)
         cost_centers = conversation_state.get('cost_centers', [])
         properties_text = ""
-        if cost_centers:
+        if cost_centers and requires_cost_center:
             properties_text = f"""
 AVAILABLE COST CENTERS ({cost_center_label}):
 {', '.join(cost_centers)}
@@ -378,24 +380,20 @@ Then ask: "Do you have another receipt to process?" """
     
     def _clean_response(self, text):
         """Remove ALL JSON blocks from response - user should never see JSON"""
-        import re
-        
-        # Remove ```json blocks (with any content inside, including newlines)
-        text = re.sub(r'```json\s*\n.*?\n```', '', text, flags=re.DOTALL)
-        text = re.sub(r'```json.*?```', '', text, flags=re.DOTALL)
+        # Remove ```json blocks - handle both with and without newlines
+        text = re.sub(r'```json\s*.*?```', '', text, flags=re.DOTALL)
         
         # Remove standalone {...} objects anywhere in text
-        # This catches both {"key": "value"} and multi-line JSON
         text = re.sub(r'\{[^{}]*\}', '', text)
         
         # Clean up extra whitespace and newlines left behind
-        text = re.sub(r'\n\s*\n+', '\n\n', text)  # Multiple newlines → double newline
+        text = re.sub(r'\n\s*\n+', '\n\n', text)
         
         cleaned = text.strip()
         
         # CRITICAL: Never return empty string (causes Claude API errors)
         if not cleaned or not cleaned.strip():
-            return "..."  # Safe neutral fallback
+            return "..."
         
         return cleaned
 
