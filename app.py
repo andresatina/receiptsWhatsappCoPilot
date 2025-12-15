@@ -522,7 +522,7 @@ def handle_text_response(from_number, text):
     user = state['user']
     
     # Handle /manage command - enter management mode
-    if text.strip().lower().startswith('/manage'):
+    if text.strip().lower() == '/manage':
         state['state'] = 'managing'
         state['pending_management_action'] = None
         cost_center_label = user.get('cost_center_label', 'property/unit')
@@ -616,6 +616,29 @@ def handle_text_response(from_number, text):
             user_message=text,
             conversation_state=state
         )
+        
+        # Check if user wants to skip (Claude detected skip intent)
+        if result['extracted_data'].get('skip'):
+            has_category = bool(state['extracted_data'].get('category'))
+            requires_cost_center = state['user'].get('requires_cost_center', True)
+            
+            if not has_category:
+                state['extracted_data']['category'] = 'Uncategorized'
+            elif requires_cost_center and not state['extracted_data'].get('cost_center'):
+                state['extracted_data']['cost_center'] = 'Unassigned'
+            
+            # Send Claude's acknowledgment response
+            whatsapp.send_message(from_number, result['response'])
+            
+            # Check if we now have everything
+            has_category = bool(state['extracted_data'].get('category'))
+            has_property = True if not requires_cost_center else bool(state['extracted_data'].get('cost_center'))
+            
+            if has_category and has_property:
+                finalize_receipt(from_number)
+            else:
+                ask_for_missing_info(from_number, state)
+            return
         
         # Update extracted data if Claude provided values
         if result['extracted_data']:
