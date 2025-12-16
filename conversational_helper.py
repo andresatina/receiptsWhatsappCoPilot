@@ -211,9 +211,18 @@ class ConversationalHandler:
         last_msg = conversation_state.get('last_system_message', '')
         suggested_pattern = conversation_state.get('suggested_pattern')
         
-        # Get company-specific cost center label
+        # Get company-specific settings
         user = conversation_state.get('user', {})
         cost_center_label = user.get('cost_center_label', 'property/unit')
+        default_language = user.get('default_language', 'en')
+        
+        # Map language codes to names
+        language_names = {
+            'es': 'Spanish',
+            'en': 'English',
+            'pt': 'Portuguese'
+        }
+        language_name = language_names.get(default_language, 'English')
         
         # Build pattern suggestion context
         patterns_text = ""
@@ -247,6 +256,8 @@ IMPORTANT: When user provides a cost center name, use fuzzy matching to find the
         situation_text = self._build_situation_context(conversation_state, last_msg, extracted_data, cost_center_label)
         
         return f"""You are Atina, an AI receipt assistant for property managers.
+
+LANGUAGE: The company's preferred language is {language_name}. Use this by default, but naturally match the user's language if they write in a different one.
 
 PERSONALITY:
 - Direct and concise - get to the point fast

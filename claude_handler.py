@@ -35,11 +35,13 @@ class ClaudeHandler:
   ]
 }
 
-IMPORTANT:
-- Only include fields you can clearly read from the receipt
-- For total_amount, extract just the number without $ or other symbols
+CRITICAL - READ CAREFULLY:
+- For total_amount: Look for the FINAL TOTAL, usually the largest number at the bottom. Common labels: "Total", "Valor", "Total a pagar", "Grand Total". READ EVERY DIGIT CAREFULLY - do not confuse 5 with 2, 1 with 7, etc.
+- Double-check the total_amount by counting each digit individually
+- For amounts with thousands (e.g., 51,000 or 51.000), preserve the full number
 - If a field is unclear or not visible, use null
 - Be accurate with the merchant name and date
+- Only include fields you can clearly read from the receipt
 
 Return ONLY valid JSON, no other text."""
 

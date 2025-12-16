@@ -541,6 +541,21 @@ def handle_text_response(from_number, text):
     
     # If user is new (no receipt sent yet)
     if state.get('state') == 'new':
+        # Race condition fix: wait 2 seconds to see if an image arrives
+        # This handles cases where user sends image + text together
+        import time as time_module
+        time_module.sleep(2)
+        
+        # Re-fetch state in case image webhook updated it
+        state = get_user_state(from_number)
+        
+        # If state changed to collecting_info, an image was processed - don't ask for receipt
+        if state.get('state') != 'new':
+            # Store the text as context for the receipt
+            if not state.get('user_context'):
+                state['user_context'] = text
+            return
+        
         # Log conversation started - Database
         logger.log_conversation_started(
             user_id=state['user']['id'],
@@ -617,33 +632,16 @@ def handle_text_response(from_number, text):
             conversation_state=state
         )
         
-        # Check if user wants to skip (Claude detected skip intent)
-        if result['extracted_data'].get('skip'):
-            has_category = bool(state['extracted_data'].get('category'))
-            requires_cost_center = state['user'].get('requires_cost_center', True)
-            
-            if not has_category:
-                state['extracted_data']['category'] = 'Uncategorized'
-            elif requires_cost_center and not state['extracted_data'].get('cost_center'):
-                state['extracted_data']['cost_center'] = 'Unassigned'
-            
-            # Send Claude's acknowledgment response
-            whatsapp.send_message(from_number, result['response'])
-            
-            # Check if we now have everything
-            has_category = bool(state['extracted_data'].get('category'))
-            has_property = True if not requires_cost_center else bool(state['extracted_data'].get('cost_center'))
-            
-            if has_category and has_property:
-                finalize_receipt(from_number)
-            else:
-                ask_for_missing_info(from_number, state)
-            return
+        # Check if user confirmed skip (after Claude asked for confirmation)
+        if result['extracted_data'].get('skip_category'):
+            state['extracted_data']['category'] = 'Uncategorized'
+        if result['extracted_data'].get('skip_cost_center'):
+            state['extracted_data']['cost_center'] = 'Unassigned'
         
         # Update extracted data if Claude provided values
         if result['extracted_data']:
             for key, value in result['extracted_data'].items():
-                if value:
+                if value and key not in ['skip_category', 'skip_cost_center']:
                     state['extracted_data'][key] = value
         
         # Check what we have now
