@@ -16,6 +16,8 @@ from conversational_helper import conversational
 from database_handler import DatabaseHandler
 from management_handler import management_handler
 from logger import logger
+from alert_handler import alert_handler
+
 
 app = Flask(__name__)
 
@@ -324,17 +326,58 @@ def handle_receipt_image(from_number, message):
         # THINK: Need to extract receipt data
         log_agent_action(state, 'think', 'need_ocr', 'Will extract data from receipt image')
         
-        # ACT: Extract data with OCR
+         # ACT: Extract data with OCR (with failure handling)
         start_time = time.time()
-        extracted_data = claude.extract_receipt_data(image_data)
-        ocr_ms = int((time.time() - start_time) * 1000)
-        
-        # OBSERVE: OCR completed
-        log_agent_action(state, 'observe', 'ocr_completed',
-                f"Extracted: {extracted_data.get('merchant_name')} ${extracted_data.get('total_amount')}",
-                duration_ms=ocr_ms,
-                metadata=extracted_data)  # ✅ Store complete object with correct field names
-        
+        try:
+            extracted_data = claude.extract_receipt_data(image_data)
+            ocr_ms = int((time.time() - start_time) * 1000)
+            
+            # OBSERVE: OCR completed
+            log_agent_action(state, 'observe', 'ocr_completed',
+                    f"Extracted: {extracted_data.get('merchant_name')} ${extracted_data.get('total_amount')}",
+                    duration_ms=ocr_ms,
+                    metadata=extracted_data)
+                    
+        except Exception as ocr_error:
+            # Save to failed receipts queue
+            alert_handler.save_failed_receipt(
+                user_id=state['user']['id'],
+                company_id=state['company_id'],
+                phone_number=from_number,
+                receipt_url=message.get('kapso', {}).get('media_url'),
+                failure_reason=f"OCR failed: {str(ocr_error)}",
+                context={
+                    'image_hash': image_hash,
+                    'error_type': type(ocr_error).__name__
+                }
+            )
+            
+            # Check for anomalies
+            if alert_handler.check_failure_rate(state['user']['id'], minutes=10, threshold=3):
+                alert_handler.log_anomaly(
+                    alert_type='high_failure_rate',
+                    severity='critical',
+                    description=f"User {from_number} had 3+ failures in 10 minutes",
+                    user_id=state['user']['id'],
+                    company_id=state['company_id'],
+                    context={'phone_number': from_number, 'error': str(ocr_error)}
+                )
+            
+            # Tell user
+            whatsapp.send_message(from_number, 
+                "I'm having trouble reading this receipt. Don't worry, we've saved it and will process it manually. You can send another one!")
+            
+            # Log error
+            logger.log_error(
+                error_type='ocr_failed',
+                error_message=str(ocr_error),
+                user_id=state['user']['id'],
+                company_id=state['company_id'],
+                context={'receipt_url': message.get('kapso', {}).get('media_url')},
+                critical=True
+            )
+            return  # Exit early
+
         # Log OCR completed - Database
         logger.log_ocr_completed(
             user_id=state['user']['id'],
