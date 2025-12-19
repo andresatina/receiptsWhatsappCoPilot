@@ -1,10 +1,10 @@
 import requests
 
 class WhatsAppHandler:
-    def __init__(self, api_key, phone_number):
+    def __init__(self, api_key, phone_number, phone_number_id):
         self.api_key = api_key
         self.phone_number = phone_number
-        self.phone_number_id = "820178674522656"
+        self.phone_number_id = phone_number_id
     
     def send_message(self, to_number, message):
         """Send text message via WhatsApp using Kapso's Meta API proxy"""

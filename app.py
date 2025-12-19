@@ -28,7 +28,8 @@ posthog.host = 'https://us.i.posthog.com'
 # Initialize handlers
 whatsapp = WhatsAppHandler(
     api_key=os.getenv('KAPSO_API_KEY'),
-    phone_number=os.getenv('WHATSAPP_PHONE_NUMBER')
+    phone_number=os.getenv('WHATSAPP_PHONE_NUMBER'),
+    phone_number_id=os.getenv('WHATSAPP_PHONE_NUMBER_ID')
 )
 claude = ClaudeHandler(api_key=os.getenv('CLAUDE_API_KEY'))
 db = DatabaseHandler()  # PostgreSQL handler
@@ -322,6 +323,16 @@ def handle_receipt_image(from_number, message):
             },
             groups={'company': str(state['company_id'])}
         )
+        # Check for consecutive event anomaly
+        if alert_handler.check_consecutive_events(state['user']['id'], 'receipt_uploaded', threshold=3):
+            alert_handler.log_anomaly(
+                alert_type='consecutive_uploads',
+                severity='warning',
+                description=f"User {from_number} uploaded 3+ receipts without progress",
+                user_id=state['user']['id'],
+                company_id=state['company_id'],
+                context={'phone_number': from_number}
+            )
         
         # THINK: Need to extract receipt data
         log_agent_action(state, 'think', 'need_ocr', 'Will extract data from receipt image')
