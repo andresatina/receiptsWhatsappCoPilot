@@ -87,15 +87,6 @@ def log_agent_action(state, action_phase, action_type, action_detail=None,
                      duration_ms=None, success=True, metadata=None):
     """
     Helper to log agent actions with automatic turn increment
-    
-    Args:
-        state: Conversation state dict
-        action_phase: 'think', 'act', 'observe'
-        action_type: Action identifier (e.g., 'ocr_extract', 'ask_category')
-        action_detail: Human-readable description
-        duration_ms: Duration in milliseconds
-        success: Whether action succeeded
-        metadata: Additional context
     """
     # Initialize if missing (for existing conversation states)
     if 'turn_number' not in state:
@@ -220,6 +211,11 @@ def webhook():
             return jsonify({'status': 'ok', 'note': 'no message in webhook'})
         
         message = data['message']
+        
+        # Skip outbound messages (they don't have 'from' field)
+        if 'from' not in message:
+            return jsonify({'status': 'ok', 'note': 'outbound message, skipping'})
+        
         from_number = message['from']
         message_type = message['type']
         
@@ -243,6 +239,9 @@ def handle_receipt_image(from_number, message):
     try:
         state = get_user_state(from_number)
         user = state['user']
+        
+        # Clear conversation history for new receipt to prevent hallucination
+        state['conversation_history'] = []
         
         # THINK: User sent receipt, need to process it
         log_agent_action(state, 'think', 'receipt_received', 
@@ -296,7 +295,7 @@ def handle_receipt_image(from_number, message):
             )
             return
         
-        # IMPROVEMENT #3: Single "Processing..." message (not multiple)
+        # Single "Processing..." message
         state['last_system_message'] = "[User just sent a receipt image, tell them you're processing it]"
         result = conversational.get_conversational_response(
             user_message="[User just sent a receipt image, tell them you're processing it]",
@@ -323,6 +322,7 @@ def handle_receipt_image(from_number, message):
             },
             groups={'company': str(state['company_id'])}
         )
+        
         # Check for consecutive event anomaly
         if alert_handler.check_consecutive_events(state['user']['id'], 'receipt_uploaded', threshold=3):
             alert_handler.log_anomaly(
@@ -337,7 +337,7 @@ def handle_receipt_image(from_number, message):
         # THINK: Need to extract receipt data
         log_agent_action(state, 'think', 'need_ocr', 'Will extract data from receipt image')
         
-         # ACT: Extract data with OCR (with failure handling)
+        # ACT: Extract data with OCR (with failure handling)
         start_time = time.time()
         try:
             extracted_data = claude.extract_receipt_data(image_data)
@@ -348,229 +348,144 @@ def handle_receipt_image(from_number, message):
                     f"Extracted: {extracted_data.get('merchant_name')} ${extracted_data.get('total_amount')}",
                     duration_ms=ocr_ms,
                     metadata=extracted_data)
-                    
-        except Exception as ocr_error:
-            # Save to failed receipts queue
-            alert_handler.save_failed_receipt(
+            
+            # Log OCR completed - Database
+            logger.log_ocr_completed(
                 user_id=state['user']['id'],
                 company_id=state['company_id'],
-                phone_number=from_number,
-                receipt_url=message.get('kapso', {}).get('media_url'),
-                failure_reason=f"OCR failed: {str(ocr_error)}",
-                context={
-                    'image_hash': image_hash,
-                    'error_type': type(ocr_error).__name__
-                }
+                receipt_hash=image_hash,
+                ocr_data=extracted_data
             )
             
-            # Check for anomalies
-            if alert_handler.check_failure_rate(state['user']['id'], minutes=10, threshold=3):
-                alert_handler.log_anomaly(
-                    alert_type='high_failure_rate',
-                    severity='critical',
-                    description=f"User {from_number} had 3+ failures in 10 minutes",
-                    user_id=state['user']['id'],
-                    company_id=state['company_id'],
-                    context={'phone_number': from_number, 'error': str(ocr_error)}
-                )
+            # PostHog: Track OCR completed
+            posthog.capture(
+                distinct_id=str(user['id']),
+                event='ocr_completed',
+                properties={
+                    'company_id': state['company_id'],
+                    'receipt_hash': image_hash,
+                    'merchant': extracted_data.get('merchant_name', ''),
+                    'amount': extracted_data.get('total_amount', 0),
+                    'ocr_ms': ocr_ms
+                },
+                groups={'company': str(state['company_id'])}
+            )
             
-            # Tell user
-            whatsapp.send_message(from_number, 
-                "I'm having trouble reading this receipt. Don't worry, we've saved it and will process it manually. You can send another one!")
+        except Exception as e:
+            ocr_ms = int((time.time() - start_time) * 1000)
             
-            # Log error
+            # Log OCR failure - Database
             logger.log_error(
                 error_type='ocr_failed',
-                error_message=str(ocr_error),
+                error_message=str(e),
                 user_id=state['user']['id'],
                 company_id=state['company_id'],
-                context={'receipt_url': message.get('kapso', {}).get('media_url')},
+                context={'receipt_hash': image_hash},
                 critical=True
             )
-            return  # Exit early
-
-        # Log OCR completed - Database
-        logger.log_ocr_completed(
-            user_id=state['user']['id'],
-            company_id=state['company_id'],
-            receipt_hash=image_hash,
-            ocr_data=extracted_data
-        )
-        
-        # PostHog: Track OCR completed
-        posthog.capture(
-            distinct_id=str(user['id']),
-            event='ocr_completed',
-            properties={
-                'company_id': state['company_id'],
-                'receipt_hash': image_hash,
-                'merchant': extracted_data.get('merchant_name'),
-                'amount': extracted_data.get('total_amount'),
-                'ocr_ms': ocr_ms,
-                'is_bank_transfer': extracted_data.get('is_bank_transfer', False)
-            },
-            groups={'company': str(state['company_id'])}
-        )
-        
-        # DEBUG: Log what was actually extracted
-        print(f"🔍 OCR EXTRACTED DATA:")
-        print(f"   Merchant: {extracted_data.get('merchant_name')}")
-        print(f"   Amount: {extracted_data.get('total_amount')}")
-        print(f"   Full data: {json.dumps(extracted_data, indent=2)}")
-        
-        # Check if it's a bank transfer (explicit flag)
-        if extracted_data.get('is_bank_transfer'):
-            # Bank transfer detected - ask for beneficiary
-            state['state'] = 'collecting_beneficiary'
-            state['image_data'] = image_data
-            state['image_hash'] = image_hash
-            state['extracted_data'] = extracted_data
-            state['last_system_message'] = "[Bank transfer detected, ask who it was paid to]"
-            state['asked_for_category'] = False
-            state['asked_for_property'] = False
+            
+            # PostHog: Track error
+            posthog.capture(
+                distinct_id=str(user['id']),
+                event='error',
+                properties={
+                    'error_type': 'ocr_failed',
+                    'error_message': str(e),
+                    'company_id': state['company_id'],
+                    'receipt_hash': image_hash,
+                    'ocr_ms': ocr_ms
+                },
+                groups={'company': str(state['company_id'])}
+            )
             
             result = conversational.get_conversational_response(
-                user_message="[Bank transfer detected, ask who it was paid to]",
+                user_message="[Error: Could not read receipt image clearly]",
                 conversation_state=state
             )
             whatsapp.send_message(from_number, result['response'])
             return
         
-        # CRITICAL: If merchant is None/empty, treat as bank transfer (fallback)
-        if not extracted_data.get('merchant_name'):
-            state['state'] = 'collecting_beneficiary'
-            state['image_data'] = image_data
-            state['image_hash'] = image_hash
-            state['extracted_data'] = extracted_data
-            state['last_system_message'] = "[Bank transfer detected, ask who it was paid to]"
-            state['asked_for_category'] = False
-            state['asked_for_property'] = False
-            
-            result = conversational.get_conversational_response(
-                user_message="[Bank transfer detected, ask who it was paid to]",
-                conversation_state=state
-            )
-            whatsapp.send_message(from_number, result['response'])
-            return
-        
-        # Store in state
+        # Store extracted data and move to collecting info state
         state['state'] = 'collecting_info'
         state['image_data'] = image_data
         state['image_hash'] = image_hash
         state['extracted_data'] = extracted_data
-        state['last_system_message'] = "[Receipt processed]"
         state['asked_for_category'] = False
         state['asked_for_property'] = False
         
-        # IMPROVEMENT #1: Ask for missing info ONCE (check what we need)
+        # Check if this is a bank transfer (no merchant name, has transaction ID)
+        if not extracted_data.get('merchant_name') and extracted_data.get('total_amount'):
+            state['state'] = 'collecting_beneficiary'
+            state['last_system_message'] = f"[Bank transfer detected, amount ${extracted_data.get('total_amount')}. Ask who the payment was to.]"
+            result = conversational.get_conversational_response(
+                user_message=state['last_system_message'],
+                conversation_state=state
+            )
+            whatsapp.send_message(from_number, result['response'])
+            return
+        
+        # Check for pattern match
+        pattern = db.find_pattern(state['company_id'], extracted_data.get('merchant_name', ''))
+        if pattern:
+            state['suggested_pattern'] = pattern
+            # Auto-apply the pattern
+            if pattern.get('category'):
+                state['extracted_data']['category'] = pattern['category']
+            if pattern.get('cost_center'):
+                state['extracted_data']['cost_center'] = pattern['cost_center']
+        
+        # Ask for missing info
         ask_for_missing_info(from_number, state)
         
     except Exception as e:
-        # Log error - Database
-        state = get_user_state(from_number)
-        logger.log_error(
-            error_type='receipt_processing_failed',
-            error_message=str(e),
-            user_id=state['user']['id'],
-            company_id=state['company_id'],
-            context={'image_url': message.get('kapso', {}).get('media_url')},
-            critical=True
-        )
-        
-        # PostHog: Track error
-        posthog.capture(
-            distinct_id=str(state['user']['id']),
-            event='error',
-            properties={
-                'error_type': 'receipt_processing_failed',
-                'error_message': str(e),
-                'company_id': state['company_id']
-            },
-            groups={'company': str(state['company_id'])}
-        )
-        
         print(f"Error handling receipt image: {str(e)}")
         import traceback
         traceback.print_exc()
-        result = conversational.get_conversational_response(
-            user_message="[Error processing receipt image]",
-            conversation_state=state
-        )
-        whatsapp.send_message(from_number, result['response'])
+        
+        try:
+            state = get_user_state(from_number)
+            logger.log_error(
+                error_type='receipt_processing_failed',
+                error_message=str(e),
+                user_id=state['user']['id'],
+                company_id=state['company_id']
+            )
+        except:
+            pass
+        
+        whatsapp.send_message(from_number, "Sorry, I had trouble processing that image. Please try sending it again.")
 
 
 def ask_for_missing_info(from_number, state):
-    """
-    Check database for patterns, suggest if found, otherwise ask
-    """
-    has_category = bool(state['extracted_data'].get('category'))
+    """Ask user for any missing receipt info (category or cost center)"""
     
-    # Skip cost center if company doesn't require it
+    extracted_data = state['extracted_data']
+    has_category = bool(extracted_data.get('category'))
+    
+    # Check if company requires cost center
     requires_cost_center = state['user'].get('requires_cost_center', True)
-    has_property = True if not requires_cost_center else bool(state['extracted_data'].get('cost_center'))
+    has_cost_center = True if not requires_cost_center else bool(extracted_data.get('cost_center'))
     
-    # If we have both, finalize immediately
-    if has_category and has_property:
-        finalize_receipt(from_number)
+    # Determine what to ask for
+    if not has_category:
+        state['last_system_message'] = "[Receipt processed, ask for category only]"
+    elif not has_cost_center:
+        state['last_system_message'] = "[Receipt processed, ask for cost_center only]"
+    else:
+        # Have everything - go to confirmation
+        state['state'] = 'awaiting_confirmation'
+        show_confirmation(from_number, state)
         return
     
-    # Check for matching patterns in database
-    merchant = state['extracted_data'].get('merchant_name', '')
-    line_items = state['extracted_data'].get('line_items', [])
-    items_text = '\n'.join([item.get('description', '') for item in line_items]) if line_items else ''
-    
-    if merchant:
-        # Extract keywords from current receipt items (if available)
-        items_keywords = []
-        if items_text:
-            import re
-            words = re.split(r'[\n,\$\d\.\s]+', items_text.lower())
-            items_keywords = [w.strip() for w in words if len(w.strip()) > 2]
-            items_keywords = list(set(items_keywords))[:10]
-        
-        # Find matching patterns using company_id
-        company_id = state['company_id']
-        matches = db.find_matching_patterns(company_id, merchant, items_keywords)
-        
-        if matches and matches[0]['similarity'] >= 60:
-            # Good match found - add to state for conversational AI to use
-            best_match = matches[0]
-            state['suggested_pattern'] = {
-                'category': best_match['category_name'],
-                'cost_center': best_match['cost_center_name'],
-                'similarity': best_match['similarity']
-            }
-            
-            # PostHog: Track pattern matched
-            posthog.capture(
-                distinct_id=str(state['user']['id']),
-                event='pattern_matched',
-                properties={
-                    'company_id': state['company_id'],
-                    'merchant': merchant,
-                    'similarity': best_match['similarity'],
-                    'category': best_match['category_name'],
-                    'cost_center': best_match['cost_center_name']
-                },
-                groups={'company': str(state['company_id'])}
-            )
-    
-    # Let conversational AI ask (will use suggested_pattern if available)
     result = conversational.get_conversational_response(
-        user_message="[Receipt processed, ask for what's missing]",
+        user_message=state['last_system_message'],
         conversation_state=state
     )
     whatsapp.send_message(from_number, result['response'])
-    
-    # Track what we've asked for
-    if not has_category:
-        state['asked_for_category'] = True
-    if not has_property:
-        state['asked_for_property'] = True
 
 
 def handle_text_response(from_number, text):
-    """Handle text responses from user - OPTIMIZED"""
+    """Handle text message from user"""
     
     state = get_user_state(from_number)
     user = state['user']
@@ -580,7 +495,7 @@ def handle_text_response(from_number, text):
         state['state'] = 'managing'
         state['pending_management_action'] = None
         cost_center_label = user.get('cost_center_label', 'property/unit')
-        term = cost_center_label.split('/')[0]  # "property", "job", etc.
+        term = cost_center_label.split('/')[0]
         
         whatsapp.send_message(from_number, f"🔧 Management mode. You can add, delete, or list {term}s and categories. Say 'done' when finished.")
         return
@@ -601,21 +516,6 @@ def handle_text_response(from_number, text):
     
     # If user is new (no receipt sent yet)
     if state.get('state') == 'new':
-        # Race condition fix: wait 2 seconds to see if an image arrives
-        # This handles cases where user sends image + text together
-        import time as time_module
-        time_module.sleep(2)
-        
-        # Re-fetch state in case image webhook updated it
-        state = get_user_state(from_number)
-        
-        # If state changed to collecting_info, an image was processed - don't ask for receipt
-        if state.get('state') != 'new':
-            # Store the text as context for the receipt
-            if not state.get('user_context'):
-                state['user_context'] = text
-            return
-        
         # Log conversation started - Database
         logger.log_conversation_started(
             user_id=state['user']['id'],
@@ -641,7 +541,7 @@ def handle_text_response(from_number, text):
     
     # Handle duplicate confirmation
     if state.get('awaiting_duplicate_confirmation'):
-        if text.lower() in ['yes', 'y', 'si', 'sí', 'si']:
+        if text.lower() in ['yes', 'y', 'si', 'sí', 'sim']:
             pending = state.pop('pending_image')
             state.pop('awaiting_duplicate_confirmation')
             
@@ -675,24 +575,79 @@ def handle_text_response(from_number, text):
     
     # Handle bank transfer beneficiary collection
     if state.get('state') == 'collecting_beneficiary':
-        # User told us who the payment was to
         state['extracted_data']['merchant_name'] = text
         state['state'] = 'collecting_info'
         state['last_system_message'] = "[Receipt processed]"
-        
-        # Now proceed with normal flow
         ask_for_missing_info(from_number, state)
         return
     
-    # Handle collecting info
-    if state.get('state') == 'collecting_info':
-        # IMPROVEMENT #4: Get conversational response and extract data
+    # Handle confirmation step - NEW
+    if state.get('state') == 'awaiting_confirmation':
+        text_lower = text.lower().strip()
+        
+        # User confirmed - save the receipt
+        if text_lower in ['yes', 'y', 'si', 'sí', 'sim', 'correct', 'correcto', 'ok', 'sip']:
+            # Save learned pattern
+            merchant = state['extracted_data'].get('merchant_name', '')
+            items = state['extracted_data'].get('items', '')
+            category = state['extracted_data'].get('category')
+            cost_center = state['extracted_data'].get('cost_center')
+            
+            if merchant and category and cost_center:
+                save_learned_pattern(from_number, merchant, items, category, cost_center)
+            
+            finalize_receipt(from_number)
+            return
+        
+        # User said no - ask what to fix
+        elif text_lower in ['no', 'n', 'não', 'nao']:
+            state['state'] = 'fixing_data'
+            state['last_system_message'] = "[User said data is incorrect, ask what needs to be fixed]"
+            result = conversational.get_conversational_response(
+                user_message=state['last_system_message'],
+                conversation_state=state
+            )
+            whatsapp.send_message(from_number, result['response'])
+            return
+        
+        # Unclear response - ask again
+        else:
+            result = conversational.get_conversational_response(
+                user_message=text,
+                conversation_state=state
+            )
+            whatsapp.send_message(from_number, result['response'])
+            return
+    
+    # Handle fixing data after user said "no" to confirmation - NEW
+    if state.get('state') == 'fixing_data':
         result = conversational.get_conversational_response(
             user_message=text,
             conversation_state=state
         )
         
-        # Check if user confirmed skip (after Claude asked for confirmation)
+        # Check if user provided corrections via JSON
+        if result['extracted_data']:
+            for key, value in result['extracted_data'].items():
+                if value and key not in ['skip_category', 'skip_cost_center']:
+                    state['extracted_data'][key] = value
+            # After getting corrections, show confirmation again
+            state['state'] = 'awaiting_confirmation'
+            show_confirmation(from_number, state)
+            return
+        
+        # Send response (asking what to fix)
+        whatsapp.send_message(from_number, result['response'])
+        return
+    
+    # Handle collecting info
+    if state.get('state') == 'collecting_info':
+        result = conversational.get_conversational_response(
+            user_message=text,
+            conversation_state=state
+        )
+        
+        # Check if user confirmed skip
         if result['extracted_data'].get('skip_category'):
             state['extracted_data']['category'] = 'Uncategorized'
         if result['extracted_data'].get('skip_cost_center'):
@@ -706,41 +661,35 @@ def handle_text_response(from_number, text):
         
         # Check what we have now
         has_category = bool(state['extracted_data'].get('category'))
-        
-        # Skip cost center if company doesn't require it
         requires_cost_center = state['user'].get('requires_cost_center', True)
         has_property = True if not requires_cost_center else bool(state['extracted_data'].get('cost_center'))
         
-        # IMPROVEMENT #4: No confirmation loop - just proceed
+        # If we have everything, show confirmation instead of saving directly
         if has_category and has_property:
-            # We have everything - save and finalize
-            merchant = state['extracted_data'].get('merchant_name', '')
-            items = state['extracted_data'].get('items', '')  # Get items text
-            category = state['extracted_data'].get('category')
-            property_unit = state['extracted_data'].get('cost_center')
-            
-            if merchant and category and property_unit:
-                save_learned_pattern(from_number, merchant, items, category, property_unit)
-            
-            finalize_receipt(from_number)
+            state['state'] = 'awaiting_confirmation'
+            show_confirmation(from_number, state)
         else:
-            # IMPROVEMENT #1: Ask for what's still missing (only once)
-            # Send the response we got (might be asking for clarification)
             whatsapp.send_message(from_number, result['response'])
-            
-            # If Claude didn't ask for the next thing, we ask
             if has_category and not has_property and not state.get('asked_for_property'):
                 state['asked_for_property'] = True
-                # Claude should have asked in the response above, so we don't double-ask
+
+
+def show_confirmation(from_number, state):
+    """Show receipt summary and ask for confirmation before saving"""
+    state['last_system_message'] = "[Show confirmation summary and ask if correct]"
+    result = conversational.get_conversational_response(
+        user_message=state['last_system_message'],
+        conversation_state=state
+    )
+    whatsapp.send_message(from_number, result['response'])
 
 
 def finalize_receipt(from_number):
-    """Save receipt to Sheets - OPTIMIZED"""
+    """Save receipt to Sheets"""
     state = conversation_states[from_number]
     user = state['user']
     
     try:
-        # Get company-specific sheets handler
         if not user.get('google_sheet_id'):
             whatsapp.send_message(from_number, "Your company doesn't have a Google Sheet configured yet. Please contact support.")
             return
@@ -750,7 +699,7 @@ def finalize_receipt(from_number):
             sheet_id=user['google_sheet_id']
         )
         
-        # IMPROVEMENT #3: Single short "Saving..." message
+        # "Saving..." message
         state['last_system_message'] = "[Tell user you're saving the receipt now]"
         result = conversational.get_conversational_response(
             user_message="[Tell user you're saving the receipt now]",
@@ -761,14 +710,13 @@ def finalize_receipt(from_number):
         # Save to Sheets with retry logic
         state['extracted_data']['submitted_by'] = user.get('name', from_number)
         
-        # Retry wrapper for Google Sheets API
         from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
         from googleapiclient.errors import HttpError
         import socket
         
         @retry(
-            stop=stop_after_attempt(3),  # Try 3 times
-            wait=wait_exponential(multiplier=1, min=2, max=10),  # 2s, 4s, 8s
+            stop=stop_after_attempt(3),
+            wait=wait_exponential(multiplier=1, min=2, max=10),
             retry=retry_if_exception_type((HttpError, socket.timeout, ConnectionError)),
             reraise=True
         )
@@ -777,7 +725,7 @@ def finalize_receipt(from_number):
         
         save_to_sheets_with_retry()
         
-        # Log receipt saved - Database
+        # Log receipt saved
         logger.log_receipt_saved(
             user_id=state['user']['id'],
             company_id=state['company_id'],
@@ -803,17 +751,15 @@ def finalize_receipt(from_number):
             groups={'company': str(state['company_id'])}
         )
         
-        # IMPROVEMENT #2: Concise success message with summary
+        # Success message
         state['last_system_message'] = "[Receipt saved successfully]"
         result = conversational.get_conversational_response(
             user_message="[Receipt saved successfully]",
             conversation_state=state
         )
-        
         whatsapp.send_message(from_number, result['response'])
         
     except Exception as e:
-        # Log error - Database
         logger.log_error(
             error_type='sheets_save_failed',
             error_message=str(e),
@@ -823,7 +769,6 @@ def finalize_receipt(from_number):
             critical=True
         )
         
-        # PostHog: Track error
         posthog.capture(
             distinct_id=str(user['id']),
             event='error',
@@ -840,7 +785,7 @@ def finalize_receipt(from_number):
         import traceback
         traceback.print_exc()
     
-    # Clear state but keep learned patterns and conversation history
+    # Clear state
     learned_patterns = state.get('learned_patterns', {})
     conversation_history = state.get('conversation_history', [])
     
