@@ -277,7 +277,8 @@ RESPONSE RULES:
 3. When asking for category: list 1-2 options in bullet points
 4. When asking for cost center: use the term "{cost_center_label}" (NOT "property/unit" unless that's the label)
 5. Accept user's answer immediately - don't confirm unless unclear
-6. SKIP HANDLING (rare exception):
+6. CRITICAL - ANTI-HALLUCINATION: For receipt details (merchant name, amount), ONLY use values from CURRENT SITUATION above. NEVER use receipt details from conversation history - they are from different receipts. The CURRENT SITUATION contains the ONLY correct values for this receipt.
+7. SKIP HANDLING (rare exception):
    - If user casually says "skip", "saltar", "pular" → DO NOT accept. Re-ask the question helpfully.
    - Only if user gives STRONG intent like "this doesn't apply", "no category needed", "es personal", "não se aplica" → ask for confirmation
    - Confirmation must be explicit: "Just to confirm - save this without a [category/property]? (yes/no)"
