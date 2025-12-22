@@ -591,6 +591,12 @@ def handle_text_response(from_number, text):
         whatsapp.send_message(from_number, response)
         if should_exit:
             state['state'] = 'new'
+            # Refresh cost centers after management changes
+            company_id = state['company_id']
+            cost_centers = db.get_cost_centers(company_id)
+            state['cost_centers'] = [cc['name'] for cc in cost_centers]
+            categories = db.get_categories(company_id)
+            state['categories'] = [c['name'] for c in categories]
         return
     
     # If user is new (no receipt sent yet)
