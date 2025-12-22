@@ -314,7 +314,7 @@ class TestWhatsAppHandler(unittest.TestCase):
         mock_response.json.return_value = {'success': True}
         mock_post.return_value = mock_response
         
-        handler = WhatsAppHandler(api_key='test-key', phone_number='1234567890')
+        handler = WhatsAppHandler(api_key='test-key', phone_number='1234567890', phone_number_id='test-id')
         result = handler.send_message('+1234567890', 'Test message')
         
         self.assertTrue(result['success'])
@@ -327,7 +327,7 @@ class TestWhatsAppHandler(unittest.TestCase):
         
         mock_post.side_effect = Exception('Network error')
         
-        handler = WhatsAppHandler(api_key='test-key', phone_number='1234567890')
+        handler = WhatsAppHandler(api_key='test-key', phone_number='1234567890', phone_number_id='test-id')
         
         with self.assertRaises(Exception):
             handler.send_message('+1234567890', 'Test message')
