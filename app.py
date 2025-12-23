@@ -424,9 +424,10 @@ def handle_receipt_image(from_number, message):
             whatsapp.send_message(from_number, result['response'])
             return
         
-        # Check for pattern match
-        # Extract keywords from line_items for pattern matching
-        items_keywords = [item['description'] for item in extracted_data.get('line_items', [])]
+       # Check for pattern match
+        # Extract keywords from line_items for pattern matching (handle None case)
+        line_items = extracted_data.get('line_items') or []
+        items_keywords = [item.get('description', '') for item in line_items if isinstance(item, dict)]
         
         patterns = db.find_matching_patterns(
             state['company_id'], 
@@ -439,7 +440,7 @@ def handle_receipt_image(from_number, message):
         
         if pattern:
             state['suggested_pattern'] = pattern
-            # Auto-apply the pattern
+            # Auto-apply the pattern (use correct dict keys from database)
             if pattern.get('category_name'):
                 state['extracted_data']['category'] = pattern['category_name']
             if pattern.get('cost_center_name'):
