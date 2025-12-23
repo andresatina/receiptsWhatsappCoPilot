@@ -440,10 +440,10 @@ def handle_receipt_image(from_number, message):
         if pattern:
             state['suggested_pattern'] = pattern
             # Auto-apply the pattern
-            if pattern.get('category'):
-                state['extracted_data']['category'] = pattern['category']
-            if pattern.get('cost_center'):
-                state['extracted_data']['cost_center'] = pattern['cost_center']
+            if pattern.get('category_name'):
+                state['extracted_data']['category'] = pattern['category_name']
+            if pattern.get('cost_center_name'):
+                state['extracted_data']['cost_center'] = pattern['cost_center_name']
         
         # Ask for missing info
         ask_for_missing_info(from_number, state)
