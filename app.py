@@ -424,27 +424,28 @@ def handle_receipt_image(from_number, message):
             whatsapp.send_message(from_number, result['response'])
             return
         
-       # Check for pattern match
-        # Extract keywords from line_items for pattern matching (handle None case)
-        line_items = extracted_data.get('line_items') or []
-        items_keywords = [item.get('description', '') for item in line_items if isinstance(item, dict)]
-        
-        patterns = db.find_matching_patterns(
-            state['company_id'], 
-            extracted_data.get('merchant_name', ''),
-            items_keywords
-        )
-        
-        # Get the best matching pattern (first in list)
-        pattern = patterns[0] if patterns else None
-        
-        if pattern:
-            state['suggested_pattern'] = pattern
-            # Auto-apply the pattern (use correct dict keys from database)
-            if pattern.get('category_name'):
-                state['extracted_data']['category'] = pattern['category_name']
-            if pattern.get('cost_center_name'):
-                state['extracted_data']['cost_center'] = pattern['cost_center_name']
+        # Check for pattern match (only if we have a merchant name)
+        if extracted_data.get('merchant_name'):
+            # Extract keywords from line_items for pattern matching (handle None case)
+            line_items = extracted_data.get('line_items') or []
+            items_keywords = [item.get('description', '') for item in line_items if isinstance(item, dict)]
+            
+            patterns = db.find_matching_patterns(
+                state['company_id'], 
+                extracted_data.get('merchant_name', ''),
+                items_keywords
+            )
+            
+            # Get the best matching pattern (first in list)
+            pattern = patterns[0] if patterns else None
+            
+            if pattern:
+                state['suggested_pattern'] = pattern
+                # Auto-apply the pattern (use correct dict keys from database)
+                if pattern.get('category_name'):
+                    state['extracted_data']['category'] = pattern['category_name']
+                if pattern.get('cost_center_name'):
+                    state['extracted_data']['cost_center'] = pattern['cost_center_name']
         
         # Ask for missing info
         ask_for_missing_info(from_number, state)
@@ -601,12 +602,14 @@ def handle_text_response(from_number, text):
         if text_lower in ['yes', 'y', 'si', 'sí', 'sim', 'correct', 'correcto', 'ok', 'sip']:
             # Save learned pattern
             merchant = state['extracted_data'].get('merchant_name', '')
-            items = state['extracted_data'].get('items', '')
+            # Convert line_items to text for pattern saving
+            line_items = state['extracted_data'].get('line_items', [])
+            items_text = '\n'.join([item.get('description', '') for item in line_items if isinstance(item, dict)])
             category = state['extracted_data'].get('category')
             cost_center = state['extracted_data'].get('cost_center')
             
             if merchant and category and cost_center:
-                save_learned_pattern(from_number, merchant, items, category, cost_center)
+                save_learned_pattern(from_number, merchant, items_text, category, cost_center)
             
             finalize_receipt(from_number)
             return
