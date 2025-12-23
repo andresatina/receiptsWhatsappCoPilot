@@ -425,7 +425,18 @@ def handle_receipt_image(from_number, message):
             return
         
         # Check for pattern match
-        pattern = db.find_pattern(state['company_id'], extracted_data.get('merchant_name', ''))
+        # Extract keywords from line_items for pattern matching
+        items_keywords = [item['description'] for item in extracted_data.get('line_items', [])]
+        
+        patterns = db.find_matching_patterns(
+            state['company_id'], 
+            extracted_data.get('merchant_name', ''),
+            items_keywords
+        )
+        
+        # Get the best matching pattern (first in list)
+        pattern = patterns[0] if patterns else None
+        
         if pattern:
             state['suggested_pattern'] = pattern
             # Auto-apply the pattern
