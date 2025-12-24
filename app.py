@@ -441,11 +441,14 @@ def handle_receipt_image(from_number, message):
             
             if pattern:
                 state['suggested_pattern'] = pattern
-                # Auto-apply the pattern (use correct dict keys from database)
-                if pattern.get('category_name'):
-                    state['extracted_data']['category'] = pattern['category_name']
-                if pattern.get('cost_center_name'):
-                    state['extracted_data']['cost_center'] = pattern['cost_center_name']
+                # Auto-apply the pattern (use correct dict keys from database with safe access)
+                category_name = pattern.get('category_name')
+                cost_center_name = pattern.get('cost_center_name')
+                
+                if category_name:
+                    state['extracted_data']['category'] = category_name
+                if cost_center_name:
+                    state['extracted_data']['cost_center'] = cost_center_name
         
         # Ask for missing info
         ask_for_missing_info(from_number, state)
