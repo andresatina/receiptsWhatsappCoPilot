@@ -183,8 +183,8 @@ class ConversationalHandler:
         if suggested_pattern:
             patterns_text = f"""
 PATTERN MATCH FOUND ({suggested_pattern['similarity']:.0f}% similarity):
-- Previously used: Category="{suggested_pattern['category']}", Cost Center="{suggested_pattern['cost_center']}"
-- ASK IMMEDIATELY: "Last time you used '{suggested_pattern['category']}' for this merchant. Use the same?"
+- Previously used: Category="{suggested_pattern['category_name']}", Cost Center="{suggested_pattern['cost_center_name']}"
+- ASK IMMEDIATELY: "Last time you used '{suggested_pattern['category_name']}' for this merchant. Use the same?"
 """
         
         requires_cost_center = user.get('requires_cost_center', True)
