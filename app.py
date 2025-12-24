@@ -409,7 +409,7 @@ def handle_receipt_image(from_number, message):
         state['state'] = 'collecting_info'
         state['image_data'] = image_data
         state['image_hash'] = image_hash
-        state['extracted_data'] = extracted_data
+        state['extracted_data'] = extracted_data if isinstance(extracted_data, dict) else {}
         state['asked_for_category'] = False
         state['asked_for_property'] = False
         
@@ -472,7 +472,11 @@ def handle_receipt_image(from_number, message):
 def ask_for_missing_info(from_number, state):
     """Ask user for any missing receipt info (category or cost center)"""
     
-    extracted_data = state['extracted_data']
+    extracted_data = state.get('extracted_data', {})
+    if not isinstance(extracted_data, dict):
+        extracted_data = {}
+        state['extracted_data'] = extracted_data
+    
     has_category = bool(extracted_data.get('category'))
     
     # Check if company requires cost center
