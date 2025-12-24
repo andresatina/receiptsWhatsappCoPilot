@@ -668,25 +668,26 @@ def handle_text_response(from_number, text):
         if result['extracted_data'].get('skip_cost_center'):
             state['extracted_data']['cost_center'] = 'Unassigned'
         
-        # Update extracted data if Claude provided values
+        # SMART EXTRACTION: Update ALL fields that Claude found in the message
         if result['extracted_data']:
             for key, value in result['extracted_data'].items():
                 if value and key not in ['skip_category', 'skip_cost_center']:
                     state['extracted_data'][key] = value
         
-        # Check what we have now
+        # RE-CHECK what we have NOW (after extraction)
         has_category = bool(state['extracted_data'].get('category'))
         requires_cost_center = state['user'].get('requires_cost_center', True)
-        has_property = True if not requires_cost_center else bool(state['extracted_data'].get('cost_center'))
+        has_cost_center = True if not requires_cost_center else bool(state['extracted_data'].get('cost_center'))
         
-        # If we have everything, show confirmation instead of saving directly
-        if has_category and has_property:
+        # If we have EVERYTHING now, go straight to confirmation
+        if has_category and has_cost_center:
             state['state'] = 'awaiting_confirmation'
             show_confirmation(from_number, state)
         else:
+            # Still missing something - acknowledge what we got and ask for what's left
             whatsapp.send_message(from_number, result['response'])
-            if has_category and not has_property and not state.get('asked_for_property'):
-                state['asked_for_property'] = True
+            # Ask for remaining missing fields
+            ask_for_missing_info(from_number, state)
 
 
 def show_confirmation(from_number, state):
