@@ -520,6 +520,28 @@ def handle_text_response(from_number, text):
         whatsapp.send_message(from_number, f"🔧 Management mode. You can add, delete, or list {term}s and categories. Say 'done' when finished.")
         return
     
+    # Handle /totals command - show monthly totals for all properties
+    if text.strip().lower() == '/totals':
+        cost_center_label = user.get('cost_center_label', 'property/unit')
+        term = cost_center_label.split('/')[0].capitalize()
+        currency = user.get('default_currency', 'USD')
+        
+        totals = db.get_all_monthly_totals(state['company_id'])
+        
+        if not totals:
+            whatsapp.send_message(from_number, f"No receipts saved this month yet.")
+            return
+        
+        from datetime import datetime
+        month_name = datetime.now().strftime('%B %Y')
+        
+        message = f"📊 Monthly totals ({month_name}):\n\n"
+        for row in totals:
+            message += f"{row['cost_center']}: {currency} {row['total']:,.2f}\n"
+        
+        whatsapp.send_message(from_number, message)
+        return
+    
     # Handle management mode
     if state.get('state') == 'managing':
         response, should_exit = management_handler.handle_management(text, state, db)
@@ -781,6 +803,23 @@ def finalize_receipt(from_number):
             conversation_state=state
         )
         whatsapp.send_message(from_number, result['response'])
+        
+        # Show monthly total for this property
+        cost_center = state['extracted_data'].get('cost_center', '')
+        if cost_center:
+            monthly_total = db.get_monthly_total_by_cost_center(
+                state['company_id'], 
+                cost_center
+            )
+            currency = user.get('default_currency', 'USD')
+            cost_center_label = user.get('cost_center_label', 'property/unit')
+            term = cost_center_label.split('/')[0]
+            
+            from datetime import datetime
+            month_name = datetime.now().strftime('%B')
+            
+            total_message = f"\n📊 Total for {cost_center} this month ({month_name}): {currency} {monthly_total:,.2f}"
+            whatsapp.send_message(from_number, total_message)
         
     except Exception as e:
         logger.log_error(

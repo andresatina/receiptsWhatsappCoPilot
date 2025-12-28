@@ -167,6 +167,51 @@ class TestDatabaseHandler(unittest.TestCase):
         category_id = db.add_category(company_id=1, category_name='Office Supplies')
         
         self.assertEqual(category_id, 5)
+    
+    @patch('database_handler.psycopg2.connect')
+    def test_get_monthly_total_by_cost_center(self, mock_connect):
+        """Test getting monthly total for specific cost center"""
+        from database_handler import DatabaseHandler
+        
+        mock_conn = MagicMock()
+        mock_cursor = MagicMock()
+        mock_connect.return_value = mock_conn
+        mock_conn.cursor.return_value = mock_cursor
+        
+        # Mock total of $1,234.56
+        mock_cursor.fetchone.return_value = (1234.56,)
+        
+        db = DatabaseHandler(database_url='postgresql://test')
+        total = db.get_monthly_total_by_cost_center(company_id=1, cost_center_name='Building A')
+        
+        self.assertEqual(total, 1234.56)
+        mock_cursor.execute.assert_called_once()
+        
+    @patch('database_handler.psycopg2.connect')
+    def test_get_all_monthly_totals(self, mock_connect):
+        """Test getting monthly totals for all cost centers"""
+        from database_handler import DatabaseHandler
+        
+        mock_conn = MagicMock()
+        mock_cursor = MagicMock()
+        mock_connect.return_value = mock_conn
+        mock_conn.cursor.return_value = mock_cursor
+        
+        # Mock multiple cost centers with totals
+        mock_cursor.fetchall.return_value = [
+            {'cost_center': 'Building A', 'total': 1234.56},
+            {'cost_center': 'Building B', 'total': 567.89},
+            {'cost_center': 'Common Areas', 'total': 890.12}
+        ]
+        
+        db = DatabaseHandler(database_url='postgresql://test')
+        totals = db.get_all_monthly_totals(company_id=1)
+        
+        self.assertEqual(len(totals), 3)
+        self.assertEqual(totals[0]['cost_center'], 'Building A')
+        self.assertEqual(totals[0]['total'], 1234.56)
+        self.assertEqual(totals[1]['cost_center'], 'Building B')
+        mock_cursor.execute.assert_called_once()
 
 
 class TestManagementHandler(unittest.TestCase):

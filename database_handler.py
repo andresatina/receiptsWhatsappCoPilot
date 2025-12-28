@@ -318,3 +318,37 @@ class DatabaseHandler:
                 (company_id,)
             )
             return [dict(row) for row in cursor.fetchall()]
+    
+    # ============ MONTHLY TOTALS ============
+    
+    def get_monthly_total_by_cost_center(self, company_id, cost_center_name):
+        """Get total amount for a specific cost center in current month"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """SELECT COALESCE(SUM(amount), 0) as total
+                   FROM receipt_events
+                   WHERE company_id = %s 
+                   AND cost_center = %s
+                   AND event_type = 'receipt_saved'
+                   AND DATE_TRUNC('month', created_at) = DATE_TRUNC('month', CURRENT_DATE)""",
+                (company_id, cost_center_name)
+            )
+            result = cursor.fetchone()
+            return float(result[0]) if result else 0.0
+    
+    def get_all_monthly_totals(self, company_id):
+        """Get totals for all cost centers in current month"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            cursor.execute(
+                """SELECT cost_center, SUM(amount) as total
+                   FROM receipt_events
+                   WHERE company_id = %s 
+                   AND event_type = 'receipt_saved'
+                   AND DATE_TRUNC('month', created_at) = DATE_TRUNC('month', CURRENT_DATE)
+                   GROUP BY cost_center
+                   ORDER BY cost_center""",
+                (company_id,)
+            )
+            return [dict(row) for row in cursor.fetchall()]
