@@ -713,10 +713,8 @@ def handle_text_response(from_number, text):
             state['state'] = 'awaiting_confirmation'
             show_confirmation(from_number, state)
         else:
-            # Still missing something - acknowledge what we got and ask for what's left
+            # Still missing something - send Claude's response (which should ask for next field)
             whatsapp.send_message(from_number, result['response'])
-            # Ask for remaining missing fields
-            ask_for_missing_info(from_number, state)
 
 
 def show_confirmation(from_number, state):
