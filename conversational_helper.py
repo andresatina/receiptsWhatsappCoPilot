@@ -229,6 +229,7 @@ RESPONSE RULES:
    - After user confirms skip → include skip in JSON
 8. NEVER claim to edit previously saved receipts. Once saved, it cannot be changed through this chat.
 9. When user says data is incorrect, ask "What needs to be fixed?" and let them provide the correct value.
+10. TRANSLATE FIELD LABELS: When showing receipt summaries, translate ALL field labels (Merchant, Amount, Category, Property/Job) to match the conversation language. Use natural labels in the user's language.
 
 STRUCTURED DATA:
 When user provides category or cost center, include JSON:
@@ -273,23 +274,23 @@ Always include conversational response BEFORE any JSON."""
             cost_center = extracted_data.get('cost_center', 'Unknown')
             cc_term = cost_center_label.split('/')[0].capitalize()
             
-            return f"""Show this summary and ask for confirmation:
+            return f"""Show receipt details and ask for confirmation:
+- Merchant name: {merchant}
+- Amount: ${amount}
+- Category: {category}
+- {cc_term}: {cost_center}
 
-📋 **Receipt Summary:**
-• Merchant: {merchant}
-• Amount: ${amount}
-• Category: {category}
-• {cc_term}: {cost_center}
-
-Ask: "Is this correct? (yes/no)"
+Translate field labels to match conversation language, then ask: "Is this correct?"
 
 If user says yes → they will confirm and we save.
 If user says no → ask what needs to be fixed."""
         
         elif '[User said data is incorrect' in last_msg:
             # NEW: Fixing mode
-            return """User said the data is incorrect. Ask them:
-"What needs to be fixed? You can correct the merchant name, amount, category, or property."
+            cc_term = cost_center_label.split('/')[0]
+            return f"""User said the data is incorrect. Ask them what needs to be fixed (merchant name, amount, category, or {cc_term}).
+
+Translate field names to match conversation language.
 
 When they provide the correct value, extract it in JSON format."""
         
@@ -323,16 +324,13 @@ When they provide the correct value, extract it in JSON format."""
         elif '[Receipt saved successfully]' in last_msg:
             data = extracted_data
             cc_term = cost_center_label.split('/')[0].capitalize()
-            return f"""Provide success summary:
+            return f"""Show success message with receipt details:
+- Merchant name: {data.get('merchant_name', 'Unknown')}
+- Amount: ${data.get('total_amount', '0.00')}
+- Category: {data.get('category', 'Unknown')}
+- {cc_term}: {data.get('cost_center', 'Unknown')}
 
-✅ Receipt saved!
-
-• Merchant: {data.get('merchant_name', 'Unknown')}
-• Amount: ${data.get('total_amount', '0.00')}
-• Category: {data.get('category', 'Unknown')}
-• {cc_term}: {data.get('cost_center', 'Unknown')}
-
-Ask: "Do you have another receipt?" """
+Translate field labels to match conversation language, then ask if they have another receipt."""
         
         elif '[User sent a duplicate receipt]' in last_msg:
             return "Duplicate detected. Ask if they want to process anyway."
